@@ -47,6 +47,7 @@
               "cli/fit",
               "cli/run",
               "cli/analyze",
+              "cli/analyze-schema",
               "cli/trace-mode"
             ]
           },
