@@ -1,0 +1,117 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Fusion GMBP",
+  "projectDescription": "Gaussian Mixture Belief Propagation for probabilistic inference on continuous variables with non-linear, multi-modal relationships.",
+  "theme": "aspen",
+  "primaryColor": "#3B82F6",
+  "lightColor": "#60A5FA",
+  "darkColor": "#2563EB",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/belief-propagation",
+              "concepts/gaussian-mixtures",
+              "concepts/graph-schema",
+              "concepts/evidence-handling"
+            ]
+          },
+          {
+            "group": "CLI Guide",
+            "pages": [
+              "cli/overview",
+              "cli/fit",
+              "cli/run",
+              "cli/analyze",
+              "cli/trace-mode"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/working-with-datasets",
+              "guides/schema-configuration",
+              "guides/convergence-tuning",
+              "guides/web-visualizer",
+              "guides/notebooks"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/bp-engine",
+              "api/evidence",
+              "api/gmm-container",
+              "api/graph-schema"
+            ]
+          },
+          {
+            "group": "Model Operations",
+            "pages": [
+              "api/gmm-fit",
+              "api/gmm-ops",
+              "api/metrics"
+            ]
+          },
+          {
+            "group": "Data & I/O",
+            "pages": [
+              "api/io-data",
+              "api/config"
+            ]
+          },
+          {
+            "group": "Analysis",
+            "pages": [
+              "api/analysis",
+              "api/benchmark"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-modal probabilistic inference with Gaussian Mixture models",
+    "Belief propagation engine for continuous variables",
+    "CLI for training, inference, and complexity analysis",
+    "Interactive web visualizer for step-by-step BP exploration",
+    "Robust numerical handling for loopy graphs",
+    "Adaptive mixture reduction and convergence diagnostics",
+    "Support for hard and soft evidence",
+    "Python API for programmatic use"
+  ],
+  "publicApiSurface": [
+    "BPEngine",
+    "Evidence",
+    "GMMContainer",
+    "GraphSchema",
+    "FactorDef",
+    "fit_joint_gmm",
+    "load_factor",
+    "save_factor",
+    "load_data",
+    "get_factor_matrix",
+    "gmbp fit",
+    "gmbp run",
+    "gmbp analyze",
+    "gmbp analyze-schema"
+  ]
+}
