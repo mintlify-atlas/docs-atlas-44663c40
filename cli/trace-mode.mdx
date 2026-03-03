@@ -1,0 +1,473 @@
+---
+title: Trace mode debugging
+description: Enable detailed per-message BP iteration tracing with --trace-bp for debugging inference
+---
+
+The `--trace-bp` flag enables detailed per-message tracing during belief propagation. This debugging mode shows the exact algorithm steps, including per-message updates, component breakdowns, deltas, and posterior beliefs after each iteration.
+
+## Overview
+
+Trace mode is useful for:
+- Understanding how messages propagate through the factor graph
+- Debugging convergence issues or unexpected posteriors
+- Verifying algorithm implementation details
+- Educational purposes (seeing GMBP mechanics step-by-step)
+
+<Warning>
+  **Output volume**: Trace mode produces extensive output. Use with `--iters 2-3` initially to limit verbosity.
+</Warning>
+
+## Enabling trace mode
+
+Add `--trace-bp` to any `gmbp run` command:
+
+```bash
+gmbp run --data abalone --schema schema_nd \
+         --factors-dir artifacts/factors_K8 --components 8 \
+         --evidence "SHELL=0.5" --trace-bp --iters 3
+```
+
+<CodeGroup>
+```bash Linux / macOS
+gmbp run --data abalone --schema schema_nd \
+         --factors-dir artifacts/factors_K8 --components 8 \
+         --evidence "SHELL=0.5" --trace-bp --iters 3
+```
+
+```powershell Windows
+gmbp run --data abalone --schema schema_nd `
+         --factors-dir artifacts\factors_K8 --components 8 `
+         --evidence "SHELL=0.5" --trace-bp --iters 3
+```
+</CodeGroup>
+
+## Trace output format
+
+Trace output goes to stderr (separate from final posterior table on stdout), formatted for readability.
+
+### Iteration summary
+
+After each iteration, trace mode shows:
+
+```
+─── Iteration 1/3 Summary ───────────────────────────
+  max_delta=inf | elapsed=0.068s | cumulative=0.068s
+  top deltas: f_whole→WHOLE(Δ=inf), f_whole→LENGTH(Δ=inf), f_len_diam→LENGTH(Δ=inf), f_len_diam→DIAMETER(Δ=inf), WHOLE→f_whole(Δ=inf)
+  posteriors:
+    DIAMETER            μ=+0.3916  σ=0.0734  K=20
+      k=0  w=0.2114  μ=+0.3475  σ=0.0253
+      k=1  w=0.1044  μ=+0.3783  σ=0.0252
+      k=2  w=0.0856  μ=+0.4521  σ=0.0289
+      ... +17 more components
+    LENGTH              μ=+0.5234  σ=0.0982  K=20
+      k=0  w=0.1987  μ=+0.4523  σ=0.0312
+      k=1  w=0.1456  μ=+0.5012  σ=0.0298
+      ... +18 more components
+    SHELL               μ=+1.4979  σ=0.0000  K=20
+      k=0  w=0.7884  μ=+1.4979  σ=0.0000
+      k=1  w=0.0543  μ=+1.4979  σ=0.0000
+      ... +18 more components
+    WHOLE               μ=+0.8392  σ=0.4982  K=19
+      k=0  w=0.1823  μ=+0.7234  σ=0.1456
+      ... +18 more components
+```
+
+<ResponseField name="max_delta" type="float">
+  Largest message change in this iteration.
+  
+  - `inf` on first iteration (all messages initialized)
+  - Decreases as BP converges
+  - Convergence achieved when below `--convergence-tol` (if specified)
+</ResponseField>
+
+<ResponseField name="elapsed" type="float">
+  Wall-clock time for this iteration in seconds.
+</ResponseField>
+
+<ResponseField name="cumulative" type="float">
+  Total elapsed time since BP started.
+</ResponseField>
+
+<ResponseField name="top deltas" type="string">
+  The 5 largest message deltas in this iteration.
+  
+  Format: `source→target(Δ=value)`
+  - Factor→Variable: `f_len_diam→LENGTH(Δ=0.0234)`
+  - Variable→Factor: `LENGTH→f_len_diam(Δ=0.0156)`
+  
+  Helps identify which messages are changing most.
+</ResponseField>
+
+### Per-message details
+
+For each message update, trace mode shows:
+
+```
+F→V: f_len_diam→LENGTH | K_out=20 | Δ=0.0234 | damp=0.000
+  [cond DIAMETER, prod 2 incoming] → K=20
+    k=0  w=0.1245  μ=+0.4523  σ=0.0312
+    k=1  w=0.0987  μ=+0.5012  σ=0.0298
+    k=2  w=0.0856  μ=+0.5234  σ=0.0321
+    ... +17 more components
+
+V→F: LENGTH→f_whole | K_out=18 | Δ=0.0187 | damp=0.000
+  [prod 2 incoming] → K=18
+    k=0  w=0.1456  μ=+0.4534  σ=0.0289
+    k=1  w=0.1234  μ=+0.5023  σ=0.0301
+    ... +16 more components
+```
+
+<ResponseField name="F→V / V→F" type="string">
+  Message direction:
+  - `F→V`: Factor to Variable
+  - `V→F`: Variable to Factor
+</ResponseField>
+
+<ResponseField name="source→target" type="string">
+  Message source and destination.
+  
+  Examples:
+  - `f_len_diam→LENGTH`: Factor "f_len_diam" sends message to variable "LENGTH"
+  - `SHELL→f_shell_rings`: Variable "SHELL" sends message to factor "f_shell_rings"
+</ResponseField>
+
+<ResponseField name="K_out" type="integer">
+  Number of components in the output message.
+  
+  May be less than `--max-components` due to weight truncation or adaptive reduction.
+</ResponseField>
+
+<ResponseField name="Δ" type="float">
+  Delta (change) from previous message.
+  
+  Component-order invariant metric measuring distributional change.
+</ResponseField>
+
+<ResponseField name="damp" type="float">
+  Damping factor applied to this message.
+  
+  - `0.000`: No damping
+  - `0.300`: 30% damping (message = 0.7 * new + 0.3 * old)
+</ResponseField>
+
+<ResponseField name="Operation description" type="string">
+  Brief description of GMM operations performed.
+  
+  Examples:
+  - `[cond DIAMETER, prod 2 incoming]`: Condition factor on DIAMETER, then product with 2 incoming messages
+  - `[prod 3 incoming]`: Product of 3 incoming messages
+</ResponseField>
+
+<ResponseField name="Component breakdown" type="array">
+  Per-component Gaussian parameters:
+  - `k`: Component index
+  - `w`: Weight (π_k)
+  - `μ`: Mean
+  - `σ`: Standard deviation
+  
+  Only top components shown; count of remaining indicated.
+</ResponseField>
+
+### Posterior beliefs
+
+After each iteration, trace mode shows current beliefs for all variables:
+
+```
+posteriors:
+  DIAMETER            μ=+0.3916  σ=0.0734  K=20
+    k=0  w=0.2114  μ=+0.3475  σ=0.0253
+    k=1  w=0.1044  μ=+0.3783  σ=0.0252
+    ... +18 more components
+```
+
+<ResponseField name="μ" type="float">
+  Belief mean (first moment).
+</ResponseField>
+
+<ResponseField name="σ" type="float">
+  Belief standard deviation.
+  
+  Evidence variables have σ=0.0 (Dirac delta).
+</ResponseField>
+
+<ResponseField name="K" type="integer">
+  Number of components in the belief mixture.
+</ResponseField>
+
+## Example trace session
+
+Full trace output for a simple inference:
+
+```bash
+gmbp run --data abalone --schema schema_nd \
+         --factors-dir artifacts/factors_K8 --components 8 \
+         --evidence "SHELL=0.5" --trace-bp --iters 2
+```
+
+Output:
+
+```
+2026-03-03 12:30:45 - INFO - Loaded graph schema for <auto>
+2026-03-03 12:30:45 - INFO - Loading factors from artifacts/factors_K8
+2026-03-03 12:30:45 - INFO - Injecting Hard Evidence: SHELL = 0.5
+2026-03-03 12:30:45 - INFO - BP trace mode enabled
+2026-03-03 12:30:45 - INFO - Running BP (iters=2, max_components=20, damping=0.000, ...)
+
+─── Iteration 1/2 ───────────────────────────────────
+F→V: f_len_diam→LENGTH | K_out=8 | Δ=inf | damp=0.000
+  [cond DIAMETER] → K=8
+    k=0  w=0.2145  μ=+0.5234  σ=0.0456
+    k=1  w=0.1876  μ=+0.4523  σ=0.0398
+    ... +6 more components
+
+F→V: f_len_diam→DIAMETER | K_out=8 | Δ=inf | damp=0.000
+  [cond LENGTH] → K=8
+    k=0  w=0.1987  μ=+0.4087  σ=0.0312
+    ... +7 more components
+
+F→V: f_whole→WHOLE | K_out=8 | Δ=inf | damp=0.000
+  [cond LENGTH] → K=8
+    k=0  w=0.2234  μ=+0.8234  σ=0.1234
+    ... +7 more components
+
+V→F: LENGTH→f_whole | K_out=8 | Δ=inf | damp=0.000
+  [prod 1 incoming] → K=8
+    k=0  w=0.2145  μ=+0.5234  σ=0.0456
+    ... +7 more components
+
+─── Iteration 1/2 Summary ───────────────────────────
+  max_delta=inf | elapsed=0.032s | cumulative=0.032s
+  top deltas: f_whole→WHOLE(Δ=inf), f_len_diam→LENGTH(Δ=inf), LENGTH→f_whole(Δ=inf), f_len_diam→DIAMETER(Δ=inf), DIAMETER→f_len_diam(Δ=inf)
+  posteriors:
+    DIAMETER            μ=+0.4087  σ=0.0312  K=8
+      k=0  w=0.1987  μ=+0.4087  σ=0.0312
+      ... +7 more components
+    LENGTH              μ=+0.5234  σ=0.0456  K=8
+      k=0  w=0.2145  μ=+0.5234  σ=0.0456
+      ... +7 more components
+    SHELL               μ=+0.5000  σ=0.0000  K=8
+      k=0  w=0.1250  μ=+0.5000  σ=0.0000
+      ... +7 more components
+    WHOLE               μ=+0.8234  σ=0.1234  K=8
+      k=0  w=0.2234  μ=+0.8234  σ=0.1234
+      ... +7 more components
+
+─── Iteration 2/2 ───────────────────────────────────
+F→V: f_len_diam→LENGTH | K_out=8 | Δ=0.0156 | damp=0.000
+  [cond DIAMETER, prod 1 incoming] → K=8
+    k=0  w=0.2087  μ=+0.5198  σ=0.0432
+    ... +7 more components
+
+...
+
+─── Iteration 2/2 Summary ───────────────────────────
+  max_delta=0.0234 | elapsed=0.028s | cumulative=0.060s
+  top deltas: f_whole→WHOLE(Δ=0.0234), f_len_diam→LENGTH(Δ=0.0156), LENGTH→f_whole(Δ=0.0145), f_len_diam→DIAMETER(Δ=0.0123), WHOLE→f_whole(Δ=0.0098)
+  posteriors:
+    DIAMETER            μ=+0.4102  σ=0.0318  K=8
+    LENGTH              μ=+0.5198  σ=0.0432  K=8
+    SHELL               μ=+0.5000  σ=0.0000  K=8
+    WHOLE               μ=+0.8156  σ=0.1198  K=8
+
+2026-03-03 12:30:45 - INFO - BP diagnostics: iterations=2 max_delta=2.340e-02 converged=False ...
+
+=== Posterior Beliefs ===
+Variable        Mean            Std Dev         #Comps    
+------------------------------------------------------------
+DIAMETER        0.4102          0.0318          8         
+LENGTH          0.5198          0.0432          8         
+SHELL (E)       0.5000          0.0000          8         
+WHOLE           0.8156          0.1198          8         
+```
+
+## Analyzing trace output
+
+### Identifying convergence issues
+
+Look for:
+1. **max_delta progression**: Should decrease over iterations
+2. **Oscillating messages**: Check if same messages appear repeatedly in "top deltas"
+3. **Belief stability**: Compare posterior means/stds across iterations
+
+<Info>
+  **Healthy convergence**: max_delta decreases smoothly (e.g., inf → 0.234 → 0.045 → 0.012)
+  
+  **Unstable convergence**: max_delta oscillates or increases (e.g., inf → 0.234 → 0.456 → 0.198)
+</Info>
+
+### Debugging unexpected posteriors
+
+If a variable's posterior seems wrong:
+1. Find all messages involving that variable in the trace
+2. Check component weights and means for each message
+3. Verify evidence is correctly injected (evidence variables should have σ=0.0)
+4. Look for factor messages that dominate the posterior
+
+### Understanding message flow
+
+Trace the path of evidence propagation:
+1. Iteration 1: Evidence variables send initial messages to factors
+2. Factors condition on evidence and send messages to other variables
+3. Variables combine incoming messages and forward to other factors
+4. Repeat until convergence
+
+## Combining with other options
+
+### Trace with damping
+
+See how damping affects message updates:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.5" \
+         --damping 0.3 --trace-bp --iters 3
+```
+
+Trace shows:
+```
+F→V: f_len_diam→LENGTH | K_out=20 | Δ=0.0156 | damp=0.300
+```
+
+Damped messages change more slowly.
+
+### Trace with convergence
+
+Monitor early stopping:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.5" \
+         --convergence-tol 1e-4 --convergence-patience 2 \
+         --trace-bp --iters 10
+```
+
+If convergence triggers before iteration 10, trace shows which iteration met the criteria.
+
+### Trace with auto-damping
+
+See adaptive damping in action:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.5" \
+         --auto-damping --damping-step 0.1 \
+         --trace-bp --iters 5
+```
+
+Trace shows damping increases when oscillations are detected:
+```
+Iteration 1: damp=0.000
+Iteration 2: damp=0.000
+Iteration 3: damp=0.100  (auto-damping triggered)
+Iteration 4: damp=0.200
+```
+
+### Trace with divergence retries
+
+Observe restart behavior:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.5" \
+         --retry-on-divergence --max-divergence-retries 2 \
+         --trace-bp --iters 5
+```
+
+If divergence triggers, trace shows:
+```
+─── Attempt 1 (damping=0.0) ───
+Iteration 1/5: max_delta=inf
+...
+Iteration 5/5: max_delta=1.234 (diverging)
+
+─── Attempt 2 (damping=0.2) ───
+Iteration 1/5: max_delta=inf
+...
+```
+
+## Redirecting trace output
+
+Trace output goes to stderr. Redirect for analysis:
+
+<CodeGroup>
+```bash Linux / macOS
+# Save trace to file
+gmbp run --data abalone --evidence "SHELL=0.5" --trace-bp --iters 3 2> trace.log
+
+# View trace separately from posterior table
+gmbp run --data abalone --evidence "SHELL=0.5" --trace-bp --iters 3 2>&1 | tee full_output.log
+```
+
+```powershell Windows
+# Save trace to file
+gmbp run --data abalone --evidence "SHELL=0.5" --trace-bp --iters 3 2> trace.log
+
+# View in console and save
+gmbp run --data abalone --evidence "SHELL=0.5" --trace-bp --iters 3 2>&1 | Tee-Object -FilePath full_output.log
+```
+</CodeGroup>
+
+## Performance considerations
+
+<Warning>
+  **Trace overhead**: `--trace-bp` adds ~10-30% computational overhead due to logging operations. Use only for debugging, not production inference.
+</Warning>
+
+<Tip>
+  **Limiting output**: Start with `--iters 2-3` to get a sense of message flow without overwhelming output. Increase iterations if you need to trace convergence behavior.
+</Tip>
+
+<Info>
+  **Output size**: Trace for a 15-variable graph with K=8 and 10 iterations produces ~50KB of text. Use `--max-components` lower values to reduce component breakdown verbosity.
+</Info>
+
+## Common debugging patterns
+
+### Pattern 1: Evidence not propagating
+
+**Symptoms**: Evidence variable has correct posterior (σ=0.0), but neighboring variables ignore it.
+
+**Diagnosis**:
+1. Enable trace
+2. Find messages from evidence variable to factors
+3. Check if factor messages reflect evidence constraint
+
+**Solution**: Verify factor scope includes evidence variable and that `--seed-messages-with-evidence` is enabled if needed.
+
+### Pattern 2: Oscillating messages
+
+**Symptoms**: max_delta doesn't decrease, same messages appear in "top deltas" repeatedly.
+
+**Diagnosis**:
+1. Enable trace with `--iters 10`
+2. Check if top deltas alternate between same message pairs
+3. Look for cycles in factor graph
+
+**Solution**: Add `--damping 0.3-0.5` to stabilize.
+
+### Pattern 3: Belief explosion
+
+**Symptoms**: Posterior means/stds become very large or NaN.
+
+**Diagnosis**:
+1. Enable trace
+2. Find first iteration where component means become unreasonable
+3. Identify which message caused the explosion
+
+**Solution**:
+- Check factor training data for outliers
+- Reduce `--max-components` to limit mixture complexity
+- Enable `--retry-on-divergence`
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Run command" icon="play" href="/cli/run">
+    See all inference options and convergence controls
+  </Card>
+  <Card title="Convergence concepts" icon="circle-nodes" href="/concepts/belief-propagation">
+    Understand convergence diagnostics in depth
+  </Card>
+  <Card title="Python API" icon="code" href="/api/bp-engine">
+    Access trace data programmatically via BPEngine
+  </Card>
+  <Card title="Loopy BP theory" icon="book" href="/concepts/belief-propagation">
+    Learn about message passing in cyclic graphs
+  </Card>
+</CardGroup>

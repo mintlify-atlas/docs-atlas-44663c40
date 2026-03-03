@@ -1,0 +1,355 @@
+---
+title: GMMContainer
+description: Gaussian Mixture Model container for probabilistic distributions
+---
+
+## Overview
+
+`GMMContainer` represents a Gaussian Mixture Model (GMM) as a weighted sum of multivariate Gaussian components. It's the fundamental data structure for representing factors, messages, and beliefs in Fusion GMBP.
+
+## Class signature
+
+```python
+@dataclass
+class GMMContainer:
+    weights: np.ndarray
+    means: np.ndarray
+    covs: np.ndarray
+    var_names: List[str]
+```
+
+<ParamField path="weights" type="np.ndarray" required>
+  Component weights. Shape: `(K,)` where K is the number of mixture components. Must sum to 1.0 (call `normalize()` if needed).
+</ParamField>
+
+<ParamField path="means" type="np.ndarray" required>
+  Mean vectors for each component. Shape: `(K, D)` where K is the number of components and D is the dimensionality (number of variables).
+</ParamField>
+
+<ParamField path="covs" type="np.ndarray" required>
+  Covariance matrices for each component. Shape: `(K, D, D)`. Each `(D, D)` matrix must be symmetric positive semi-definite.
+</ParamField>
+
+<ParamField path="var_names" type="List[str]" required>
+  List of variable names corresponding to each dimension. Length must equal D.
+</ParamField>
+
+## Properties
+
+### n_components
+
+Return the number of mixture components.
+
+```python
+@property
+def n_components(self) -> int
+```
+
+<ResponseField name="n_components" type="int">
+  Number of Gaussian components in the mixture (K)
+</ResponseField>
+
+### dim
+
+Return the dimensionality of the mixture.
+
+```python
+@property
+def dim(self) -> int
+```
+
+<ResponseField name="dim" type="int">
+  Number of dimensions/variables (D)
+</ResponseField>
+
+## Methods
+
+### normalize
+
+Normalize component weights to sum to 1.0.
+
+```python
+def normalize(self) -> None
+```
+
+Modifies the `weights` array in-place. If weights sum to zero or non-finite value, falls back to uniform weights.
+
+<Note>
+Always call `normalize()` after manually constructing or modifying a GMMContainer to ensure valid probability distribution.
+</Note>
+
+## Usage examples
+
+### Creating a simple GMM
+
+```python
+import numpy as np
+from gmbp import GMMContainer
+
+# Single-component univariate Gaussian
+gmm = GMMContainer(
+    weights=np.array([1.0]),
+    means=np.array([[0.5]]),
+    covs=np.array([[[0.1]]]),
+    var_names=["X"]
+)
+
+print(f"Components: {gmm.n_components}")  # 1
+print(f"Dimensions: {gmm.dim}")  # 1
+```
+
+### Multi-component mixture
+
+```python
+import numpy as np
+from gmbp import GMMContainer
+
+# Bimodal distribution
+gmm = GMMContainer(
+    weights=np.array([0.6, 0.4]),
+    means=np.array([[0.3], [0.7]]),
+    covs=np.array([[[0.01]], [[0.02]]]),
+    var_names=["SHELL"]
+)
+gmm.normalize()
+```
+
+### Multivariate GMM
+
+```python
+import numpy as np
+from gmbp import GMMContainer
+
+# Joint distribution over two variables
+gmm = GMMContainer(
+    weights=np.array([0.5, 0.5]),
+    means=np.array([
+        [0.3, 0.4],  # Component 1: LENGTH=0.3, DIAMETER=0.4
+        [0.6, 0.5]   # Component 2: LENGTH=0.6, DIAMETER=0.5
+    ]),
+    covs=np.array([
+        [[0.01, 0.002],
+         [0.002, 0.01]],
+        [[0.02, 0.003],
+         [0.003, 0.02]]
+    ]),
+    var_names=["LENGTH", "DIAMETER"]
+)
+gmm.normalize()
+
+print(f"Joint distribution over {gmm.var_names}")
+print(f"Number of components: {gmm.n_components}")
+```
+
+## GMM operations
+
+Fusion GMBP provides several operations on GMMs through the `gmm_ops` module:
+
+### Conditioning
+
+Condition a GMM on observed variables:
+
+```python
+from gmbp.gmm_ops import condition_gmm
+from gmbp import Evidence
+import numpy as np
+
+# Joint GMM over [LENGTH, DIAMETER, WHOLE]
+joint_gmm = GMMContainer(...)
+
+# Observe WHOLE = 1.2
+evidence = Evidence.from_hard(np.array([1.2]))
+
+# Get conditional distribution p(LENGTH, DIAMETER | WHOLE=1.2)
+conditional = condition_gmm(
+    joint_gmm=joint_gmm,
+    obs_vars=["WHOLE"],
+    evidence=evidence
+)
+
+print(f"Conditional over: {conditional.var_names}")
+# Output: ['LENGTH', 'DIAMETER']
+```
+
+### Marginalization
+
+Marginalize out variables:
+
+```python
+from gmbp.gmm_ops import marginalize_gmm
+
+# Joint GMM over [LENGTH, DIAMETER, WHOLE]
+joint_gmm = GMMContainer(...)
+
+# Get marginal p(LENGTH, DIAMETER)
+marginal = marginalize_gmm(
+    gmm=joint_gmm,
+    keep_vars=["LENGTH", "DIAMETER"]
+)
+
+print(f"Marginal over: {marginal.var_names}")
+# Output: ['LENGTH', 'DIAMETER']
+```
+
+### Product
+
+Multiply two GMMs over the same variables:
+
+```python
+from gmbp.gmm_ops import multiply_gmms
+
+# Two messages over the same variable
+msg1 = GMMContainer(..., var_names=["X"])
+msg2 = GMMContainer(..., var_names=["X"])
+
+# Compute product (unnormalized posterior)
+product = multiply_gmms(msg1, msg2)
+product.normalize()
+```
+
+### Reduction
+
+Reduce the number of components using weighted K-means:
+
+```python
+from gmbp.gmm_ops import reduce_gmm
+
+# GMM with 50 components
+large_gmm = GMMContainer(...)
+print(f"Original: {large_gmm.n_components} components")
+
+# Reduce to 20 components
+reduced = reduce_gmm(
+    gmm=large_gmm,
+    max_components=20,
+    adaptive=False
+)
+print(f"Reduced: {reduced.n_components} components")
+```
+
+### Adaptive reduction
+
+Use entropy-based adaptive component selection:
+
+```python
+from gmbp.gmm_ops import reduce_gmm
+
+# Automatically determine component count based on weight concentration
+reduced = reduce_gmm(
+    gmm=large_gmm,
+    max_components=20,
+    adaptive=True,
+    min_components=5
+)
+
+# Component count will be between 5 and 20 based on effective support
+print(f"Adaptive reduction: {reduced.n_components} components")
+```
+
+### Combining independent GMMs
+
+Form joint distribution from independent marginals:
+
+```python
+from gmbp.gmm_ops import combine_independent_gmms
+
+# Three independent marginals
+shell_gmm = GMMContainer(..., var_names=["SHELL"])
+length_gmm = GMMContainer(..., var_names=["LENGTH"])
+diameter_gmm = GMMContainer(..., var_names=["DIAMETER"])
+
+# Create joint (tensor product)
+joint = combine_independent_gmms([shell_gmm, length_gmm, diameter_gmm])
+
+print(f"Joint over: {joint.var_names}")
+# Output: ['SHELL', 'LENGTH', 'DIAMETER']
+print(f"Components: {joint.n_components}")
+# Output: product of component counts
+```
+
+## Validation
+
+The `GMMContainer` validates shapes during initialization:
+
+```python
+K = len(weights)
+D = len(var_names)
+
+assert means.shape == (K, D)
+assert covs.shape == (K, D, D)
+```
+
+<Warning>
+If shape validation fails, a `ValueError` is raised immediately. Always ensure your arrays have consistent dimensions.
+</Warning>
+
+## Implementation details
+
+### Automatic array conversion
+
+In `__post_init__`, all inputs are converted to numpy arrays:
+
+```python
+self.weights = np.asarray(self.weights)
+self.means = np.asarray(self.means)
+self.covs = np.asarray(self.covs)
+```
+
+This allows you to pass Python lists, which are automatically converted:
+
+```python
+# This works - lists are auto-converted
+gmm = GMMContainer(
+    weights=[0.6, 0.4],
+    means=[[0.3], [0.7]],
+    covs=[[[0.01]], [[0.02]]],
+    var_names=["X"]
+)
+```
+
+### Numerical stability
+
+All GMM operations in `gmm_ops.py` include numerical safeguards:
+
+1. **Covariance symmetrization**: Ensures symmetry via `0.5 * (cov + cov.T)`
+2. **PSD projection**: Eigenvalue flooring to guarantee positive semi-definiteness
+3. **Safe precision computation**: Jitter ladder for stable matrix inversion
+4. **Log-space weight updates**: Prevents underflow in component products
+
+<Tip>
+When working with very small covariances (nearly deterministic components), the implementation automatically applies small jitter values (1e-10 to 1e-12) to maintain numerical stability.
+</Tip>
+
+## Performance considerations
+
+### Component count growth
+
+Certain operations cause exponential component growth:
+
+- **Product**: `K1 * K2` components
+- **Conditioning**: `K_joint * K_evidence` components
+- **Combine independent**: Product of all component counts
+
+Always apply reduction after these operations:
+
+```python
+from gmbp.gmm_ops import multiply_gmms, reduce_gmm
+
+product = multiply_gmms(gmm1, gmm2)
+reduced = reduce_gmm(product, max_components=20)
+```
+
+### Memory usage
+
+Memory scales as O(K * D²) due to covariance matrices:
+
+- K=20, D=3: ~3.6 KB per GMM
+- K=50, D=10: ~180 KB per GMM
+- K=100, D=20: ~6.4 MB per GMM
+
+For large factor graphs, keep component counts moderate (10-30 per message).
+
+## Related
+
+- [BPEngine](/api/bp-engine) - Use GMMs in belief propagation
+- [Evidence](/api/evidence) - Convert between Evidence and GMM

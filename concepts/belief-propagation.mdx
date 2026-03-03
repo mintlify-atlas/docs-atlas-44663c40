@@ -1,0 +1,255 @@
+---
+title: Belief propagation
+description: Learn how Fusion GMBP implements loopy belief propagation with message passing between factors and variables
+---
+
+Belief propagation (BP) is a message-passing algorithm for computing marginal distributions in probabilistic graphical models. Fusion GMBP implements **loopy belief propagation** with Gaussian mixture messages to handle cyclic graph structures and multi-modal distributions.
+
+## How it works
+
+The BP algorithm iteratively passes messages between factors and variables until convergence:
+
+1. **Factor-to-variable messages**: Each factor sends a message to each variable in its scope
+2. **Variable-to-factor messages**: Each variable sends a message to each connected factor
+3. **Belief computation**: After convergence, variable beliefs are computed by combining all incoming messages
+
+### Message update schedule
+
+Fusion GMBP supports two update schedules:
+
+- **Synchronous** (default): All messages are computed from the previous iteration's state
+- **Sequential** (Gauss-Seidel): Each message update is applied immediately, potentially improving convergence on loopy graphs
+
+```python
+engine.run(
+    max_iter=10,
+    update_order="sequential"  # or "synchronous"
+)
+```
+
+## Factor-to-variable messages
+
+Factor-to-variable messages are computed by conditioning the factor's joint distribution on incoming messages from other variables.
+
+<Note>
+For pairwise factors (scope of 2 variables), this is a simple conditioning operation. For higher-order factors, sequential conditioning is applied to avoid exponential component growth.
+</Note>
+
+From `bp_messages.py:17`:
+
+```python
+def compute_factor_to_variable_msg(
+    factor_gmm: GMMContainer,
+    target_var: str,
+    incoming_messages: Dict[str, GMMContainer],
+    max_components: int = 20,
+) -> GMMContainer:
+    """
+    Computes message from a factor to a specific target variable.
+    """
+    # Sequential conditioning: condition one variable at a time
+    current_gmm = factor_gmm
+    
+    for var in obs_vars:
+        msg = incoming_messages[var]
+        ev = Evidence.from_gmm(msg)
+        current_gmm = condition_gmm(current_gmm, obs_vars=[var], evidence=ev)
+        current_gmm = reduce_gmm(current_gmm, max_components)
+    
+    return current_gmm
+```
+
+## Variable-to-factor messages
+
+Variable-to-factor messages combine all incoming factor messages (except from the target factor) with any local evidence.
+
+From `bp_messages.py:102`:
+
+```python
+def compute_variable_to_factor_msg(
+    incoming_messages: List[GMMContainer],
+    evidence: Optional[Evidence] = None,
+    max_components: int = 20,
+) -> GMMContainer:
+    """
+    Computes message from a variable to a factor.
+    Product of all incoming messages and local evidence.
+    """
+    current_gmm = None
+    
+    # Incorporate evidence if present
+    if evidence is not None:
+        current_gmm = GMMContainer(
+            weights=evidence.weights,
+            means=evidence.means,
+            covs=evidence.covs,
+        )
+    
+    # Multiply with incoming messages
+    for msg in incoming_messages:
+        if current_gmm is None:
+            current_gmm = msg
+        else:
+            current_gmm = multiply_gmms(current_gmm, msg)
+            current_gmm = reduce_gmm(current_gmm, max_components)
+    
+    return current_gmm
+```
+
+## Convergence monitoring
+
+The BP engine tracks several convergence metrics:
+
+- **Max delta**: Maximum change in message parameters across all edges
+- **Delta trace**: History of max delta values per iteration
+- **Convergence tolerance**: Absolute threshold for early stopping
+- **Convergence patience**: Number of consecutive iterations below tolerance required
+
+```python
+stats = engine.run(
+    max_iter=20,
+    convergence_tol=1e-4,
+    convergence_patience=2,
+    convergence_min_iter=4
+)
+
+print(f"Converged: {stats['converged']}")
+print(f"Final delta: {stats['max_delta']}")
+```
+
+### Message delta computation
+
+From `bp_engine.py:102`, the delta metric is component-order invariant:
+
+```python
+def _message_delta(cls, old: GMMContainer, new: GMMContainer) -> float:
+    """
+    Scalar distance between two messages for convergence monitoring.
+    Compares canonically-sorted component arrays for sensitivity.
+    """
+    if old.means.shape == new.means.shape:
+        # Component-level comparison with canonical ordering
+        old_idx = cls._canonical_component_order(old)
+        new_idx = cls._canonical_component_order(new)
+        return float(max(
+            np.max(np.abs(old.weights[old_idx] - new.weights[new_idx])),
+            np.max(np.abs(old.means[old_idx] - new.means[new_idx])),
+            np.max(np.abs(old.covs[old_idx] - new.covs[new_idx])),
+        ))
+    else:
+        # Moment-based fallback for shape mismatches
+        old_mean = np.einsum("k,kd->d", old.weights, old.means)
+        new_mean = np.einsum("k,kd->d", new.weights, new.means)
+        # Compare mixture mean and variance
+        return float(np.max(np.abs(old_mean - new_mean)))
+```
+
+## Stability diagnostics
+
+Loopy BP can exhibit oscillation or divergence. The engine computes runtime diagnostics:
+
+<Accordion title="Stability metrics">
+- **Oscillation count**: Number of sign flips in delta changes
+- **Contraction ratio**: Median ratio of consecutive deltas
+- **Spectral radius proxy**: Geometric mean of delta ratios (should be < 1.0)
+- **Stability label**: `contractive`, `marginal`, `unstable`, or `unknown`
+- **Diverging flag**: True if sustained delta growth detected
+</Accordion>
+
+```python
+stats = engine.run(max_iter=20)
+
+print(f"Stability: {stats['stability_label']}")
+print(f"Spectral radius: {stats['spectral_radius_proxy']:.3f}")
+print(f"Oscillations: {stats['oscillation_count']}")
+```
+
+## Damping for stability
+
+Damping can stabilize oscillating updates:
+
+```python
+engine.run(
+    max_iter=20,
+    damping=0.3  # Mix 30% of old message with 70% of new
+)
+```
+
+Damping formula from `bp_engine.py:267`:
+
+```python
+damped = GMMContainer(
+    weights=(1.0 - damping) * new.weights + damping * old.weights,
+    means=(1.0 - damping) * new.means + damping * old.means,
+    covs=(1.0 - damping) * new.covs + damping * old.covs,
+)
+```
+
+<Info>
+Damping only applies when message dimensions match. If component counts change, the new message is used directly.
+</Info>
+
+### Auto-damping
+
+Auto-damping automatically increases damping when oscillation or monotone growth is detected:
+
+```python
+engine.run(
+    max_iter=20,
+    auto_damping=True,
+    damping_step=0.1,
+    max_damping=0.9
+)
+```
+
+From `bp_engine.py:644`:
+
+```python
+if auto_damping and len(delta_trace) >= 3:
+    tail = delta_trace[-3:]
+    monotone_growth = tail[2] > tail[1] > tail[0]
+    sign_flip = (tail[2] - tail[1]) * (tail[1] - tail[0]) < 0.0
+    
+    if monotone_growth or sign_flip:
+        current_damping = min(max_damping, current_damping + damping_step)
+```
+
+## Divergence recovery
+
+For unstable graphs, divergence recovery can retry BP with increased damping:
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+  --retry-on-divergence \
+  --max-divergence-retries 2 \
+  --retry-damping-step 0.2
+```
+
+<Warning>
+Divergence retry is expensive. Use `--divergence-patience` to stop unstable runs early before retrying.
+</Warning>
+
+## Belief computation
+
+After BP converges (or reaches max iterations), compute final beliefs:
+
+```python
+beliefs = engine.compute_beliefs(max_components=20)
+
+for var_name, belief in beliefs.items():
+    mean = np.sum(belief.weights * belief.means[:, 0])
+    print(f"{var_name}: μ={mean:.4f}, K={belief.n_components}")
+```
+
+From `bp_engine.py:755`, beliefs are computed identically to variable-to-factor messages but include **all** incoming factor messages:
+
+```python
+def compute_beliefs(self, max_components: int = 20) -> Dict[str, GMMContainer]:
+    beliefs = {}
+    for var_name, connected_factors in self.neighbors.items():
+        ev = self.evidence.get(var_name)
+        incoming_list = [self.messages[(f, var_name)] for f in connected_factors]
+        belief = compute_variable_belief(incoming_list, ev, max_components)
+        beliefs[var_name] = belief
+    return beliefs
+```

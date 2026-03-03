@@ -1,0 +1,178 @@
+---
+title: Installation
+description: Install Fusion GMBP with uv and Python 3.10+
+---
+
+# Installation
+
+Fusion GMBP requires **Python 3.10+** and **[uv](https://docs.astral.sh/uv/)** for dependency management.
+
+## Prerequisites
+
+### Install uv
+
+If you don't have uv installed, follow the [official uv installation guide](https://docs.astral.sh/uv/getting-started/installation/).
+
+<CodeGroup>
+```bash macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+```powershell Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+</CodeGroup>
+
+### Check Python version
+
+Ensure you have Python 3.10 or higher:
+
+```bash
+python --version
+# Should output Python 3.10.x or higher
+```
+
+## Install from source
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone <repository-url>
+    cd fusion-gmbp
+    ```
+  </Step>
+
+  <Step title="Create virtual environment">
+    ```bash
+    uv venv
+    ```
+    
+    This creates a `.venv` directory with an isolated Python environment.
+  </Step>
+
+  <Step title="Install the package">
+    Install with development dependencies:
+    
+    ```bash
+    uv pip install -e ".[dev]"
+    ```
+    
+    This installs:
+    - **Core dependencies**: numpy, scipy, scikit-learn, pandas
+    - **Dev tools**: pytest, ruff, mypy, pytest-cov
+  </Step>
+
+  <Step title="Verify installation">
+    Check that the CLI is available:
+    
+    ```bash
+    uv run gmbp --help
+    ```
+    
+    You should see the main help message with available subcommands.
+  </Step>
+</Steps>
+
+## Installation extras
+
+Fusion GMBP provides optional dependency groups for different use cases:
+
+| Extra | Packages | Use case |
+|-------|----------|----------|
+| `dev` | pytest, ruff, mypy, pytest-cov | Development and testing |
+| `webapp` | fastapi, uvicorn | Interactive web visualizer |
+| `notebooks` | jupyter, matplotlib | Visualization and experiments |
+
+### Install multiple extras
+
+You can combine extras during installation:
+
+```bash
+# Development + web app
+uv pip install -e ".[dev,webapp]"
+
+# All extras
+uv pip install -e ".[dev,webapp,notebooks]"
+```
+
+## Using the environment
+
+### Option 1: uv run (recommended)
+
+Run commands directly without activating the environment:
+
+```bash
+uv run gmbp fit --data abalone
+uv run pytest
+uv run python my_script.py
+```
+
+This automatically uses the project's virtual environment.
+
+### Option 2: Activate the environment
+
+If you prefer to activate the environment:
+
+<CodeGroup>
+```bash macOS / Linux
+source .venv/bin/activate
+```
+
+```powershell Windows
+.venv\Scripts\Activate.ps1
+```
+</CodeGroup>
+
+Once activated, you can run commands directly:
+
+```bash
+gmbp --help
+pytest
+python my_script.py
+```
+
+To deactivate:
+
+```bash
+deactivate
+```
+
+## Project structure
+
+After installation, your project structure should look like:
+
+```
+fusion-gmbp/
+├── .venv/                   # Virtual environment (created by uv venv)
+├── src/gmbp/                # Main package source
+│   ├── __init__.py          # Public API exports
+│   ├── cli.py               # CLI entry point
+│   ├── bp_engine.py         # Belief Propagation engine
+│   ├── gmm_ops.py           # GMM operations
+│   └── ...
+├── data/                    # Example datasets
+│   ├── abalone/
+│   └── circular_factory/
+├── tests/                   # Test suite
+├── pyproject.toml           # Project configuration
+└── README.md
+```
+
+## Core dependencies
+
+Fusion GMBP depends on:
+
+- **numpy >= 1.24**: Array operations and numerical computation
+- **scipy >= 1.10**: Statistical distributions and linear algebra
+- **scikit-learn >= 1.3**: GMM fitting with EM algorithm
+- **pandas >= 2.2.3**: Data loading and manipulation
+
+<Info>
+All dependencies are automatically installed by `uv pip install`.
+</Info>
+
+## Next steps
+
+<Card title="Quick start guide" icon="rocket" href="/quickstart">
+  Learn how to run your first inference with Fusion GMBP
+</Card>

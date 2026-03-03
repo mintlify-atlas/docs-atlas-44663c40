@@ -1,0 +1,246 @@
+---
+title: Working with datasets
+description: Learn how to add custom datasets to Fusion GMBP for probabilistic inference
+---
+
+Fusion GMBP uses a standardized directory structure for datasets. This guide shows you how to add your own dataset and integrate it with the library.
+
+## Dataset structure
+
+Each dataset follows a consistent file organization pattern:
+
+```
+data/
+└── my_dataset/
+    ├── my_dataset.csv        # Raw data file
+    └── my_dataset.json       # Schema definition (preferred)
+    # OR
+    └── schema.json           # Fallback schema name
+```
+
+<Note>
+The schema file naming follows this priority:
+1. `<dataset_name>.json` (preferred)
+2. `schema.json` (fallback for backward compatibility)
+</Note>
+
+## Adding a new dataset
+
+<Steps>
+  <Step title="Create dataset directory">
+    Create a folder under `data/` matching your dataset name:
+
+    ```bash
+    mkdir -p data/my_dataset
+    ```
+  </Step>
+
+  <Step title="Add CSV data file">
+    Place your CSV file in the directory with a matching name:
+
+    ```bash
+    data/my_dataset/my_dataset.csv
+    ```
+
+    The CSV should contain numeric columns representing your continuous variables.
+  </Step>
+
+  <Step title="Create schema definition">
+    Define the graph structure in a JSON schema file. The schema specifies:
+    - Variables (nodes in the factor graph)
+    - Column mappings (CSV columns to variable names)
+    - Factors (relationships between variables)
+
+    Save as `data/my_dataset/my_dataset.json`
+  </Step>
+
+  <Step title="Fit the model">
+    Train the Gaussian Mixture Models on your dataset:
+
+    ```bash
+    gmbp fit --data my_dataset
+    ```
+
+    This auto-detects the CSV and default schema from the dataset name.
+  </Step>
+
+  <Step title="Run inference">
+    Execute belief propagation with evidence:
+
+    ```bash
+    gmbp run --data my_dataset --factors-dir artifacts/factors --evidence "VAR1=0.5"
+    ```
+  </Step>
+</Steps>
+
+## Schema file format
+
+Here's the schema structure from the abalone dataset (`data/abalone/schema.json`):
+
+```json
+{
+  "variables": ["LENGTH", "DIAMETER", "WHOLE"],
+  "column_map": {
+    "LENGTH": "Length",
+    "DIAMETER": "Diameter",
+    "WHOLE": "Whole weight"
+  },
+  "factors": [
+    {
+      "name": "f_len_diam_whole",
+      "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+      "n_components": 10
+    }
+  ]
+}
+```
+
+### Schema fields
+
+<Accordion title="variables">
+List of canonical variable names used throughout the factor graph. These are the internal identifiers for your variables.
+</Accordion>
+
+<Accordion title="column_map">
+Maps canonical variable names to actual CSV column headers. This allows you to use clean internal names while supporting arbitrary CSV column naming.
+
+**Example:**
+```json
+"column_map": {
+  "LENGTH": "Length",
+  "SHELL": "Shell weight"
+}
+```
+</Accordion>
+
+<Accordion title="factors">
+Defines the joint probability distributions (factors) in your graphical model. Each factor specifies:
+
+- `name`: Unique identifier for the factor
+- `scope`: List of variables participating in this factor
+- `n_components`: Number of Gaussian mixture components (optional, defaults to 10)
+
+**Example:**
+```json
+{
+  "name": "f_diam_shell",
+  "scope": ["DIAMETER", "SHELL"],
+  "n_components": 10
+}
+```
+</Accordion>
+
+## CLI usage patterns
+
+The CLI supports flexible dataset and schema resolution:
+
+### Using dataset name only
+
+```bash
+# Auto-detects data/abalone/abalone.csv and data/abalone/abalone.json
+gmbp fit --data abalone
+```
+
+### Explicit schema override
+
+```bash
+# Use alternative schema in same dataset folder
+gmbp fit --data abalone --schema schema_nd
+```
+
+<Info>
+Schema files are resolved inside the dataset folder. The `.json` extension is optional:
+- `--schema schema_nd` → `data/abalone/schema_nd.json`
+- `--schema custom` → `data/abalone/custom.json`
+</Info>
+
+### Explicit file paths
+
+```bash
+# Cross-platform file path
+gmbp fit --schema data/abalone/schema_nd.json --data abalone
+```
+
+## Example: Full workflow
+
+Here's a complete example adding a custom dataset:
+
+```bash
+# 1. Create directory structure
+mkdir -p data/sensor_readings
+
+# 2. Copy your CSV data
+cp ~/raw_data/sensors.csv data/sensor_readings/sensor_readings.csv
+
+# 3. Create schema (see schema format above)
+cat > data/sensor_readings/sensor_readings.json << 'EOF'
+{
+  "variables": ["TEMP", "PRESSURE", "HUMIDITY"],
+  "column_map": {
+    "TEMP": "temperature_c",
+    "PRESSURE": "pressure_kpa",
+    "HUMIDITY": "humidity_pct"
+  },
+  "factors": [
+    {
+      "name": "f_temp_pressure",
+      "scope": ["TEMP", "PRESSURE"],
+      "n_components": 8
+    },
+    {
+      "name": "f_pressure_humidity",
+      "scope": ["PRESSURE", "HUMIDITY"],
+      "n_components": 8
+    }
+  ]
+}
+EOF
+
+# 4. Fit GMM factors
+gmbp fit --data sensor_readings --components 8
+
+# 5. Run inference with evidence
+gmbp run --data sensor_readings \
+         --factors-dir artifacts/factors \
+         --evidence "TEMP=22.5" \
+         --iters 10
+```
+
+## Tips and best practices
+
+<Tip>
+**Start with pairwise factors**: Begin with 2-variable factors (pairwise) before experimenting with higher-dimensional factors. They're easier to fit and visualize.
+</Tip>
+
+<Warning>
+**Numeric data only**: All variables must be continuous numeric types. Categorical variables should be encoded numerically or handled separately.
+</Warning>
+
+<Tip>
+**Component selection**: Use the complexity analysis tools to find optimal mixture component counts:
+
+```bash
+gmbp analyze --schema my_dataset --factor f_my_factor \
+             --holdout-fraction 0.25 --max-k 20
+```
+</Tip>
+
+## Validation
+
+After adding your dataset, verify the schema loads correctly:
+
+```bash
+# This validates schema structure and factor scopes
+gmbp fit --data my_dataset --schema my_schema
+```
+
+For stricter validation requiring all factors to be pairwise:
+
+```bash
+gmbp fit --data my_dataset --strict-pairwise
+```
+
+## Related resources
+
+- [Schema configuration](/guides/schema-configuration) - Detailed schema design patterns
+- [Convergence tuning](/guides/convergence-tuning) - Optimize inference parameters

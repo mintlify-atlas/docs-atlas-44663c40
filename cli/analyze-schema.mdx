@@ -1,0 +1,476 @@
+---
+title: gmbp analyze-schema
+description: Run complexity sweeps for all factors in a schema with aggregated results and per-factor metrics
+---
+
+The `gmbp analyze-schema` command performs batch complexity analysis across all factors defined in a schema. It runs NLL vs. K sweeps for each factor, aggregates the results, and generates both machine-readable JSON and human-readable Markdown summaries.
+
+## Basic usage
+
+```bash
+gmbp analyze-schema --schema abalone --max-k 20
+```
+
+This command:
+1. Loads the schema and dataset
+2. Runs complexity sweeps (K=1..20) for every factor
+3. Aggregates validation/train NLL curves across factors
+4. Saves per-factor JSON results to `per_factor/` subdirectory
+5. Writes aggregate summary to `summary.json` and `summary.md`
+
+## Command options
+
+### Required parameters
+
+<ParamField path="--schema" type="string" required>
+  Dataset name or path to schema JSON.
+  
+  ```bash
+  gmbp analyze-schema --schema abalone
+  ```
+</ParamField>
+
+### Optional parameters
+
+<ParamField path="--data" type="string">
+  Dataset name or path to input CSV.
+  
+  If omitted, inferred from `--schema` using standard resolution logic.
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --data abalone
+  ```
+</ParamField>
+
+<ParamField path="--max-k" type="integer" default="20">
+  Maximum components for each factor sweep.
+  
+  All factors are swept from K=1 to `max-k`.
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --max-k 30
+  ```
+</ParamField>
+
+<ParamField path="--holdout-fraction" type="float" default="0.25">
+  Validation split fraction.
+  
+  - `0.25`: 25% validation (default, recommended)
+  - `0.0`: No holdout, full-dataset NLL only
+  - `0.2`: 20% validation
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --holdout-fraction 0.25 --max-k 20
+  ```
+</ParamField>
+
+<ParamField path="--seed" type="integer" default="42">
+  Random seed for reproducibility.
+  
+  Controls train/validation split and GMM initialization across all factors.
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --seed 12345
+  ```
+</ParamField>
+
+<ParamField path="--out-dir" type="string">
+  Output directory for schema-level artifacts.
+  
+  Default: `artifacts/schema_analysis/<schema_name>_<timestamp>`
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --out-dir results/schema_complexity
+  ```
+</ParamField>
+
+<ParamField path="--pairwise-only" type="boolean">
+  Drop non-pairwise factors before analysis.
+  
+  Keeps only factors with exactly 2 variables in their scope. Useful for ensuring tree-structured or pairwise-constrained inference.
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --pairwise-only
+  ```
+</ParamField>
+
+<ParamField path="--no-markdown" type="boolean">
+  Skip writing the Markdown summary.
+  
+  Use when only JSON output is needed for automated processing.
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --no-markdown
+  ```
+</ParamField>
+
+<ParamField path="--strict-pairwise" type="boolean">
+  Enforce pairwise-only validation when loading schema.
+  
+  Schema loading fails if any factor has more than 2 variables (stricter than `--pairwise-only` which just filters).
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --strict-pairwise
+  ```
+</ParamField>
+
+<ParamField path="--verbose" type="boolean">
+  Enable verbose logging. Short form: `-v`
+  
+  ```bash
+  gmbp analyze-schema --schema abalone --verbose
+  ```
+</ParamField>
+
+## Examples
+
+### Basic schema-wide sweep
+
+Run validation NLL sweeps for all factors with default settings:
+
+```bash
+gmbp analyze-schema --schema abalone --holdout-fraction 0.25 --max-k 20
+```
+
+Output:
+```
+2026-03-03 11:15:30 - INFO - Loading data from abalone
+2026-03-03 11:15:30 - INFO - Analyzing factor f_len_diam_whole (scope=['LENGTH', 'DIAMETER', 'WHOLE'], K sweep 1..20, holdout=25%)
+2026-03-03 11:15:35 - INFO - Analyzing factor f_shell_rings (scope=['SHELL', 'RINGS'], K sweep 1..20, holdout=25%)
+...
+2026-03-03 11:16:20 - INFO - Schema-level complexity sweep artifacts available at artifacts/schema_analysis/abalone_20260303_111530
+```
+
+### Custom output directory
+
+Organize results in a specific location:
+
+```bash
+gmbp analyze-schema --schema abalone --holdout-fraction 0.25 --max-k 20 \
+                     --out-dir artifacts/schema_analysis/abalone_holdout
+```
+
+### Pairwise-only analysis
+
+Analyze only pairwise factors (drop higher-order factors):
+
+```bash
+gmbp analyze-schema --schema abalone --pairwise-only --max-k 20
+```
+
+Log output:
+```
+INFO - Pairwise-only mode active: keeping 12 factors, dropped=['f_len_diam_whole', 'f_trivariate_factor']
+```
+
+### JSON-only output
+
+Skip Markdown summary for automated workflows:
+
+```bash
+gmbp analyze-schema --schema abalone --no-markdown --max-k 20
+```
+
+### Extended sweep range
+
+Test higher component counts:
+
+```bash
+gmbp analyze-schema --schema abalone --max-k 50
+```
+
+### Full dataset (no holdout)
+
+Use all data for fitting (no validation split):
+
+```bash
+gmbp analyze-schema --schema abalone --holdout-fraction 0.0 --max-k 20
+```
+
+## Output structure
+
+The command generates a timestamped directory with organized results:
+
+```
+artifacts/schema_analysis/abalone_20260303_111530/
+├── summary.json                 # Aggregate results and metadata
+├── summary.md                   # Human-readable summary
+└── per_factor/
+    ├── f_len_diam_whole.json
+    ├── f_shell_rings.json
+    └── ...
+```
+
+### summary.json
+
+Aggregate schema-level results:
+
+```json summary.json
+{
+  "schema": "abalone",
+  "data_target": "abalone",
+  "timestamp": "20260303_111530",
+  "holdout_fraction": 0.25,
+  "max_k": 20,
+  "seed": 42,
+  "pairwise_only": false,
+  "dropped_factors": [],
+  "factors_analyzed": 15,
+  "best_k_mean_primary": 12,
+  "aggregate_primary_metric": "val_nll",
+  "aggregate_secondary_metric": "train_nll",
+  "aggregate_curves": {
+    "k_values": [1, 2, 3, ..., 20],
+    "primary_mean": [3.245, 2.876, 2.543, ..., 2.421],
+    "primary_std": [0.234, 0.198, 0.187, ..., 0.203],
+    "secondary_mean": [3.214, 2.834, 2.501, ..., 2.358],
+    "secondary_std": [0.198, 0.176, 0.165, ..., 0.178]
+  },
+  "factors": [
+    {
+      "name": "f_len_diam_whole",
+      "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+      "samples": 4175,
+      "train_size": 3131,
+      "validation_size": 1044,
+      "k_values": [1, 2, ..., 20],
+      "results": [
+        {"k": 1, "train_nll": 3.214, "val_nll": 3.245, "runtime": 0.152},
+        {"k": 2, "train_nll": 2.834, "val_nll": 2.876, "runtime": 0.234},
+        ...
+      ]
+    },
+    ...
+  ],
+  "output_dir": "artifacts/schema_analysis/abalone_20260303_111530"
+}
+```
+
+<ResponseField name="best_k_mean_primary" type="integer">
+  K value with lowest mean validation NLL across all factors.
+  
+  This is the recommended component count for the schema as a whole.
+</ResponseField>
+
+<ResponseField name="aggregate_curves" type="object">
+  Aggregated NLL curves:
+  - `primary_mean`: Mean validation NLL across factors
+  - `primary_std`: Standard deviation of validation NLL
+  - `secondary_mean`: Mean training NLL across factors
+  - `secondary_std`: Standard deviation of training NLL
+</ResponseField>
+
+<ResponseField name="factors" type="array">
+  Per-factor results including scope, sample counts, and full K-sweep curves.
+</ResponseField>
+
+### summary.md
+
+Human-readable recap:
+
+```markdown summary.md
+# Schema Complexity Sweep: abalone
+
+- Timestamp: 20260303_111530
+- Holdout fraction: 0.25
+- Max components: 20
+- Factors analyzed: 15
+- Dropped non-pairwise factors: None
+- Aggregate metric: Validation NLL
+- Best K (mean Validation NLL): 12
+
+This sweep mirrors the schema-wide NLL vs. complexity analysis
+(similar to Figures 5 & 9 from the original slides) using the current dataset artifacts.
+```
+
+### Per-factor JSON
+
+Each factor gets its own detailed result file:
+
+```json per_factor/f_len_diam_whole.json
+{
+  "name": "f_len_diam_whole",
+  "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+  "samples": 4175,
+  "train_size": 3131,
+  "validation_size": 1044,
+  "k_values": [1, 2, 3, ..., 20],
+  "results": [
+    {"k": 1, "train_nll": 3.214, "val_nll": 3.245, "runtime": 0.152},
+    {"k": 2, "train_nll": 2.834, "val_nll": 2.876, "runtime": 0.234},
+    ...
+  ]
+}
+```
+
+## Interpreting results
+
+### Best K recommendation
+
+The `best_k_mean_primary` field indicates the optimal component count across all factors:
+
+```json
+"best_k_mean_primary": 12
+```
+
+This means K=12 minimizes the average validation NLL across the schema.
+
+<Info>
+  **Using best K**: After analysis, refit factors with the recommended K:
+  ```bash
+  gmbp fit --data abalone --components 12
+  ```
+</Info>
+
+### Aggregate curves
+
+The `aggregate_curves` show average performance trends:
+
+- **primary_mean** (validation NLL): Shows generalization quality
+- **primary_std**: Indicates consistency across factors
+- **secondary_mean** (training NLL): Shows fitting quality
+
+<Tip>
+  **Curve interpretation**: If validation NLL plateaus or increases while training NLL continues decreasing, the model is overfitting. Choose K before this divergence.
+</Tip>
+
+### Pairwise-only mode
+
+When `--pairwise-only` is used:
+
+```json
+"pairwise_only": true,
+"dropped_factors": ["f_len_diam_whole", "f_trivariate_factor"],
+"factors_analyzed": 12
+```
+
+Non-pairwise factors are excluded from analysis. The `best_k_mean_primary` applies only to the remaining pairwise factors.
+
+## Plotting aggregate results
+
+Visualize schema-wide complexity trends:
+
+```python plot_schema_complexity.py
+import json
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Load summary
+with open("artifacts/schema_analysis/abalone_20260303_111530/summary.json") as f:
+    summary = json.load(f)
+
+curves = summary["aggregate_curves"]
+k_values = curves["k_values"]
+val_mean = curves["primary_mean"]
+val_std = curves["primary_std"]
+train_mean = curves["secondary_mean"]
+train_std = curves["secondary_std"]
+
+# Plot with error bands
+plt.figure(figsize=(10, 6))
+plt.plot(k_values, val_mean, label="Mean Validation NLL", marker="o", linewidth=2)
+plt.fill_between(k_values, 
+                 np.array(val_mean) - np.array(val_std),
+                 np.array(val_mean) + np.array(val_std),
+                 alpha=0.2)
+plt.plot(k_values, train_mean, label="Mean Training NLL", marker="s", linewidth=2)
+plt.fill_between(k_values,
+                 np.array(train_mean) - np.array(train_std),
+                 np.array(train_mean) + np.array(train_std),
+                 alpha=0.2)
+plt.axvline(summary["best_k_mean_primary"], color="red", linestyle="--", 
+            label=f"Best K = {summary['best_k_mean_primary']}")
+plt.xlabel("Number of Components (K)")
+plt.ylabel("Average NLL")
+plt.title(f"Schema Complexity Analysis: {summary['schema']}")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+Install dependencies:
+```bash
+uv pip install -e ".[notebooks]"
+```
+
+## Comparison with gmbp analyze
+
+| Feature | `gmbp analyze` | `gmbp analyze-schema` |
+|---------|----------------|----------------------|
+| Scope | Single factor or custom scope | All factors in schema |
+| Output | One JSON file | Per-factor JSON + aggregate summary |
+| Aggregate curves | No | Yes |
+| Best K recommendation | No | Yes (schema-wide) |
+| Use case | Deep dive on specific factor | Schema-wide model selection |
+
+<Tip>
+  **When to use analyze-schema**:
+  - You want a single K value for all factors
+  - You need aggregate performance metrics
+  - You're evaluating overall schema design
+  
+  **When to use analyze**:
+  - You need per-factor custom K values
+  - You're debugging a specific factor
+  - You want to analyze variables not in schema
+</Tip>
+
+## Error handling
+
+### No factors in schema
+
+```
+ERROR - Schema defines no factors; cannot run schema analysis
+```
+
+**Solution**: Add factor definitions to your schema JSON.
+
+### All factors dropped
+
+```
+ERROR - --pairwise-only removed all factors; nothing to analyze
+```
+
+**Solution**: Either:
+- Remove `--pairwise-only` flag
+- Add pairwise factors to your schema
+- Use `gmbp analyze --scope` for specific variable pairs
+
+### Data loading failure
+
+```
+ERROR - Data loading failed: CSV file not found
+```
+
+**Solution**: Verify dataset structure follows conventions (see [Working with datasets](/guides/working-with-datasets)).
+
+## Performance notes
+
+<Info>
+  **Runtime**: Schema analysis with 15 factors and K=1..20 typically takes 2-5 minutes depending on dataset size and factor complexity.
+</Info>
+
+<Tip>
+  **Parallelization**: The command processes factors sequentially. For very large schemas, consider running multiple `gmbp analyze` commands in parallel for different factors, then aggregating manually.
+</Tip>
+
+<Warning>
+  **Large schemas**: Analyzing schemas with >50 factors and high max-k can take significant time. Consider using `--max-k 15` initially to get quick feedback.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Fit with optimal K" icon="circle-nodes" href="/cli/fit">
+    Use the recommended best K to train your model
+  </Card>
+  <Card title="Single factor analysis" icon="chart-line" href="/cli/analyze">
+    Deep dive into specific factors with custom scopes
+  </Card>
+  <Card title="Visualization" icon="chart-area" href="/guides/notebooks">
+    Plot complexity curves with matplotlib
+  </Card>
+  <Card title="Gaussian mixtures" icon="book" href="/concepts/gaussian-mixtures">
+    Understand bias-variance trade-offs in component selection
+  </Card>
+</CardGroup>

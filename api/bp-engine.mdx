@@ -1,0 +1,355 @@
+---
+title: BPEngine
+description: Belief Propagation Engine for Gaussian Mixture Belief Propagation
+---
+
+## Overview
+
+The `BPEngine` class implements the core Belief Propagation algorithm for Gaussian Mixture models. It manages message passing between factors and variables in a factor graph to compute posterior beliefs.
+
+## Class signature
+
+```python
+@dataclass
+class BPEngine:
+    factors: Dict[str, GMMContainer]
+    neighbors: Dict[str, List[str]]
+    factor_scopes: Dict[str, List[str]]
+    evidence: Dict[str, Evidence] = field(default_factory=dict)
+    messages: Dict[Tuple[str, str], GMMContainer] = field(default_factory=dict)
+```
+
+<ParamField path="factors" type="Dict[str, GMMContainer]" required>
+  Dictionary mapping factor names to their Gaussian Mixture Model representations
+</ParamField>
+
+<ParamField path="neighbors" type="Dict[str, List[str]]" required>
+  Dictionary mapping variable names to lists of connected factor names
+</ParamField>
+
+<ParamField path="factor_scopes" type="Dict[str, List[str]]" required>
+  Dictionary mapping factor names to their scope (list of variable names)
+</ParamField>
+
+<ParamField path="evidence" type="Dict[str, Evidence]" default="{}">
+  Optional dictionary mapping variable names to evidence observations
+</ParamField>
+
+<ParamField path="messages" type="Dict[Tuple[str, str], GMMContainer]" default="{}">
+  Internal state storing messages between nodes. Key format: (source, target)
+</ParamField>
+
+## Methods
+
+### initialize_messages
+
+Initialize all messages in the graph with broad priors or evidence-seeded messages.
+
+```python
+def initialize_messages(
+    self,
+    default_mean: float = 0.0,
+    default_var: float = 10.0,
+    seed_with_evidence: bool = False,
+) -> None
+```
+
+<ParamField path="default_mean" type="float" default="0.0">
+  Mean value for initial broad prior messages
+</ParamField>
+
+<ParamField path="default_var" type="float" default="10.0">
+  Variance for initial broad prior messages
+</ParamField>
+
+<ParamField path="seed_with_evidence" type="bool" default="False">
+  If `True`, variable-to-factor messages for observed variables are initialized directly from the evidence mixture. This can reduce burn-in iterations on evidence-heavy loopy graphs.
+</ParamField>
+
+<Note>
+By default, both directions start from broad single-component priors. When `seed_with_evidence=True`, observed variables get more informative initial messages.
+</Note>
+
+### run
+
+Run synchronous Belief Propagation for a fixed number of iterations with advanced convergence and stability controls.
+
+```python
+def run(
+    self,
+    max_iter: int = 10,
+    max_components: int = 20,
+    damping: float = 0.0,
+    update_order: str = "synchronous",
+    convergence_tol: float | None = None,
+    convergence_rtol: float = 0.0,
+    convergence_patience: int = 1,
+    convergence_min_iter: int = 0,
+    adaptive_reduction: bool = False,
+    min_components: int = 1,
+    auto_damping: bool = False,
+    damping_step: float = 0.1,
+    max_damping: float = 0.9,
+    divergence_patience: int | None = None,
+    trace_bp: bool = False,
+) -> Dict[str, Any]
+```
+
+#### Parameters
+
+<ParamField path="max_iter" type="int" default="10">
+  Maximum number of BP iterations to perform
+</ParamField>
+
+<ParamField path="max_components" type="int" default="20">
+  Cap for per-message Gaussian mixture component reduction
+</ParamField>
+
+<ParamField path="damping" type="float" default="0.0">
+  Message damping factor in [0, 1). New message = `(1-damping)*new + damping*old` component-wise when dimensions match. Higher damping stabilizes loopy graphs but slows convergence.
+</ParamField>
+
+<ParamField path="update_order" type="str" default="synchronous">
+  Message update scheduling strategy:
+  - `"synchronous"`: Computes all messages from the previous iterate (standard BP)
+  - `"sequential"`: Applies each update immediately (Gauss-Seidel-like, may converge faster on some graphs)
+</ParamField>
+
+<ParamField path="convergence_tol" type="float | None" default="None">
+  Optional absolute early-stop threshold on max message delta. If specified, BP stops when `max_delta <= effective_tol` for `convergence_patience` consecutive iterations.
+</ParamField>
+
+<ParamField path="convergence_rtol" type="float" default="0.0">
+  Optional relative early-stop tolerance applied as `effective_tol = convergence_tol + convergence_rtol * delta_ref`, where `delta_ref` is the running maximum observed delta.
+</ParamField>
+
+<ParamField path="convergence_patience" type="int" default="1">
+  Number of consecutive iterations that must satisfy `max_delta <= effective_tol` before triggering early-stop.
+</ParamField>
+
+<ParamField path="convergence_min_iter" type="int" default="0">
+  Minimum number of BP iterations to run before convergence checks are allowed to trigger early-stop.
+</ParamField>
+
+<ParamField path="adaptive_reduction" type="bool" default="False">
+  If `True`, uses adaptive component count based on weight concentration (ESS/entropy-driven effective cap).
+</ParamField>
+
+<ParamField path="min_components" type="int" default="1">
+  Minimum number of components when using adaptive reduction.
+</ParamField>
+
+<ParamField path="auto_damping" type="bool" default="False">
+  If `True`, automatically increase damping when recent delta dynamics indicate oscillation or monotone growth.
+</ParamField>
+
+<ParamField path="damping_step" type="float" default="0.1">
+  Increment applied by auto-damping updates.
+</ParamField>
+
+<ParamField path="max_damping" type="float" default="0.9">
+  Upper bound for auto-damping.
+</ParamField>
+
+<ParamField path="divergence_patience" type="int | None" default="None">
+  Optional number of consecutive strictly growing max-delta iterations required to trigger early divergence stop. If `None`, only end-of-run divergence heuristics are reported.
+</ParamField>
+
+<ParamField path="trace_bp" type="bool" default="False">
+  If `True`, enables detailed per-message and per-iteration tracing for debugging and visualization.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="iterations" type="float">
+  Number of iterations actually performed
+</ResponseField>
+
+<ResponseField name="max_delta" type="float">
+  Final maximum message delta
+</ResponseField>
+
+<ResponseField name="converged" type="bool">
+  Whether convergence criteria were met
+</ResponseField>
+
+<ResponseField name="update_order" type="str">
+  The update order strategy used
+</ResponseField>
+
+<ResponseField name="delta_trace" type="list[float]">
+  Per-iteration max delta trace for convergence monitoring
+</ResponseField>
+
+<ResponseField name="effective_tol_trace" type="list[float]">
+  Per-iteration effective tolerance values
+</ResponseField>
+
+<ResponseField name="damping_trace" type="list[float]">
+  Per-iteration damping values (useful when auto_damping is enabled)
+</ResponseField>
+
+<ResponseField name="final_damping" type="float">
+  Final damping value after all iterations
+</ResponseField>
+
+<ResponseField name="oscillation_count" type="float">
+  Number of sign changes in delta trajectory
+</ResponseField>
+
+<ResponseField name="contraction_ratio" type="float">
+  Median ratio of consecutive deltas
+</ResponseField>
+
+<ResponseField name="spectral_radius_proxy" type="float">
+  Geometric mean of delta ratios (proxy for spectral radius)
+</ResponseField>
+
+<ResponseField name="stability_label" type="str">
+  Stability classification: `"contractive"`, `"marginal"`, `"unstable"`, or `"unknown"`
+</ResponseField>
+
+<ResponseField name="diverging" type="bool">
+  Whether divergence was detected
+</ResponseField>
+
+<ResponseField name="early_stopped_on_divergence" type="bool">
+  Whether early divergence stop was triggered
+</ResponseField>
+
+<ResponseField name="nonfinite_delta_detected" type="bool">
+  Whether NaN or infinite deltas were encountered
+</ResponseField>
+
+<Warning>
+The `run` method requires messages to be initialized first via `initialize_messages()`.
+</Warning>
+
+### compute_beliefs
+
+Compute the final posterior belief (marginal) for every variable in the graph.
+
+```python
+def compute_beliefs(
+    self,
+    max_components: int = 20,
+    adaptive_reduction: bool = False,
+    min_components: int = 1,
+) -> Dict[str, GMMContainer]
+```
+
+<ParamField path="max_components" type="int" default="20">
+  Maximum number of components in the resulting belief mixtures
+</ParamField>
+
+<ParamField path="adaptive_reduction" type="bool" default="False">
+  Whether to use adaptive component reduction
+</ParamField>
+
+<ParamField path="min_components" type="int" default="1">
+  Minimum number of components when adaptive reduction is enabled
+</ParamField>
+
+<ResponseField name="beliefs" type="Dict[str, GMMContainer]">
+  Dictionary mapping variable names to their posterior belief distributions as GMMContainer objects
+</ResponseField>
+
+## Usage example
+
+```python
+import json
+from gmbp import BPEngine, Evidence, load_factor, GraphSchema
+
+# 1. Load schema
+with open("data/abalone/schema.json", "r") as f:
+    schema = GraphSchema.from_dict(json.load(f))
+
+# 2. Load trained factors
+factors = {}
+for f_def in schema.factors:
+    factors[f_def.name] = load_factor(f_def.name, K=10)
+
+# 3. Define hard evidence
+evidence = {
+    "SHELL": Evidence.from_hard([0.4])
+}
+
+# 4. Initialize engine
+engine = BPEngine(
+    factors=factors,
+    neighbors=schema.get_neighbors(),
+    factor_scopes=schema.get_factor_scopes(),
+    evidence=evidence
+)
+
+# 5. Initialize messages (optionally seed with evidence)
+engine.initialize_messages(seed_with_evidence=True)
+
+# 6. Run belief propagation with convergence checks
+results = engine.run(
+    max_iter=20,
+    max_components=20,
+    convergence_tol=1e-4,
+    convergence_patience=2,
+    damping=0.3,
+    adaptive_reduction=True
+)
+
+print(f"Converged: {results['converged']}")
+print(f"Iterations: {results['iterations']}")
+print(f"Stability: {results['stability_label']}")
+
+# 7. Compute final beliefs
+beliefs = engine.compute_beliefs(
+    max_components=20,
+    adaptive_reduction=True
+)
+
+# 8. Access posterior for a specific variable
+shell_belief = beliefs["SHELL"]
+print(f"SHELL posterior: {shell_belief.n_components} components")
+print(f"Mean: {shell_belief.means}")
+print(f"Weights: {shell_belief.weights}")
+```
+
+## Advanced: Loopy BP stabilization
+
+For challenging loopy graphs, combine multiple stabilization techniques:
+
+```python
+results = engine.run(
+    max_iter=50,
+    max_components=20,
+    # Damping with auto-escalation
+    damping=0.2,
+    auto_damping=True,
+    damping_step=0.15,
+    max_damping=0.9,
+    # Early convergence check
+    convergence_tol=1e-4,
+    convergence_rtol=0.05,
+    convergence_patience=3,
+    convergence_min_iter=5,
+    # Divergence detection
+    divergence_patience=4,
+    # Sequential updates (Gauss-Seidel)
+    update_order="sequential",
+    # Adaptive mixture reduction
+    adaptive_reduction=True,
+    min_components=2
+)
+
+if results["diverging"]:
+    print(f"Warning: BP diverged (spectral radius proxy: {results['spectral_radius_proxy']:.3f})")
+    print(f"Oscillation count: {results['oscillation_count']}")
+```
+
+<Tip>
+For most applications, start with default settings. Add damping (0.2-0.5) if you observe oscillation in the delta trace. Enable `auto_damping` for automatic stabilization.
+</Tip>
+
+## Related
+
+- [Evidence](/api/evidence) - Define hard and soft evidence
+- [GMMContainer](/api/gmm-container) - Gaussian Mixture representation
+- [GraphSchema](/api/graph-schema) - Define factor graph structure

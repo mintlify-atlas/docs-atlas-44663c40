@@ -1,0 +1,512 @@
+---
+title: Convergence tuning
+description: Configure and optimize belief propagation convergence parameters for stable, efficient inference
+---
+
+Loopy belief propagation on cyclic factor graphs requires careful tuning of convergence parameters. This guide covers the available controls and strategies for achieving stable, efficient inference.
+
+## Overview
+
+Fusion GMBP provides multiple mechanisms to control BP convergence:
+
+- **Damping** - Smooth message updates to reduce oscillations
+- **Early stopping** - Terminate when messages stabilize
+- **Auto-damping** - Adaptive damping based on dynamics
+- **Divergence recovery** - Automatic retry with increased damping
+- **Update scheduling** - Synchronous vs. sequential message passing
+- **Mixture reduction** - Control complexity growth
+
+## Basic convergence parameters
+
+### Iteration count
+
+Set maximum BP iterations:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" --iters 10
+```
+
+The engine runs exactly this many iterations unless early stopping triggers.
+
+<Info>
+**Default:** 10 iterations. For loopy graphs, you may need 20-50 iterations depending on topology and damping.
+</Info>
+
+### Maximum components
+
+Cap mixture component growth during message passing:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --max-components 20
+```
+
+This limits the component count in all messages to prevent exponential growth.
+
+<Tip>
+Start with `--max-components 20`. Increase if you need to preserve more distributional detail, decrease for faster inference.
+</Tip>
+
+## Damping
+
+Damping smooths message updates to reduce oscillations in loopy graphs.
+
+### Basic damping
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" --damping 0.3
+```
+
+Damping formula: `new_message = (1 - λ) * computed + λ * old`
+
+Where λ is the damping coefficient in [0, 1).
+
+<Accordion title="When to use damping">
+**Use damping when:**
+- Factor graph has cycles (loopy BP)
+- Observing oscillating beliefs
+- Max delta fluctuates wildly between iterations
+- Divergence warnings appear in logs
+
+**Typical values:**
+- `0.0` - No damping (trees, stable loopy graphs)
+- `0.1-0.3` - Light damping (mild stability issues)
+- `0.4-0.6` - Moderate damping (significant oscillations)
+- `0.7-0.9` - Heavy damping (severe instability)
+</Accordion>
+
+### Auto-damping
+
+Automatically increase damping when instability is detected:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --damping 0.1 \
+         --auto-damping \
+         --damping-step 0.1 \
+         --max-damping 0.9
+```
+
+**How it works:**
+- Monitors recent max-delta trace (last 3 iterations)
+- Detects monotone growth or sign flips (oscillations)
+- Increases damping by `damping-step` when triggered
+- Stops at `max-damping` upper bound
+
+<Info>
+Auto-damping provides adaptive stabilization without manual tuning. Start with `--damping 0.1` and let the engine escalate as needed.
+</Info>
+
+### Damping parameters
+
+<Accordion title="--damping FLOAT">
+**Default:** 0.0
+
+Initial damping coefficient in [0, 1). Set to 0 for no damping.
+
+**Example:** `--damping 0.3`
+</Accordion>
+
+<Accordion title="--auto-damping">
+**Default:** False
+
+Enable adaptive damping escalation based on delta dynamics.
+
+**Example:** `--auto-damping`
+</Accordion>
+
+<Accordion title="--damping-step FLOAT">
+**Default:** 0.1
+
+Increment for auto-damping adjustments. Must be > 0.
+
+**Example:** `--damping-step 0.15`
+</Accordion>
+
+<Accordion title="--max-damping FLOAT">
+**Default:** 0.9
+
+Upper bound for damping when auto-damping is enabled. Must be in (0, 1).
+
+**Example:** `--max-damping 0.85`
+</Accordion>
+
+## Early stopping
+
+Terminate BP when messages stabilize, saving unnecessary iterations.
+
+### Convergence tolerance
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --convergence-tol 1e-4 \
+         --convergence-patience 2 \
+         --convergence-min-iter 4
+```
+
+Early stopping triggers when:
+1. `max_delta ≤ effective_tol` for `patience` consecutive iterations
+2. At least `min_iter` iterations have completed
+
+### Effective tolerance
+
+The effective tolerance combines absolute and relative terms:
+
+```
+effective_tol = convergence_tol + convergence_rtol * delta_ref
+```
+
+Where `delta_ref` is the running maximum observed delta.
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --convergence-tol 1e-4 \
+         --convergence-rtol 0.05
+```
+
+<Note>
+Relative tolerance prevents premature stopping during early high-delta iterations while still allowing convergence detection.
+</Note>
+
+### Convergence parameters
+
+<Accordion title="--convergence-tol FLOAT">
+**Default:** None (disabled)
+
+Absolute threshold on max message delta for early stopping.
+
+**Example:** `--convergence-tol 1e-4`
+
+**Typical values:**
+- `1e-3` - Loose convergence
+- `1e-4` - Standard convergence
+- `1e-5` - Tight convergence
+</Accordion>
+
+<Accordion title="--convergence-rtol FLOAT">
+**Default:** 0.0
+
+Relative tolerance term added to absolute tolerance. Must be ≥ 0.
+
+**Example:** `--convergence-rtol 0.05`
+
+**Usage:** Set to 0.01-0.1 to allow adaptive tolerance based on delta magnitude.
+</Accordion>
+
+<Accordion title="--convergence-patience INT">
+**Default:** 1
+
+Consecutive iterations below threshold required before stopping. Must be ≥ 1.
+
+**Example:** `--convergence-patience 3`
+
+**Usage:** Increase to 2-3 to avoid stopping on transient dips.
+</Accordion>
+
+<Accordion title="--convergence-min-iter INT">
+**Default:** 0
+
+Minimum iterations before convergence checks can trigger. Must be ≥ 0.
+
+**Example:** `--convergence-min-iter 5`
+
+**Usage:** Set to 3-5 to ensure initial message propagation completes.
+</Accordion>
+
+## Divergence handling
+
+Automatic recovery when BP diverges on difficult loopy graphs.
+
+### Retry on divergence
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --retry-on-divergence \
+         --max-divergence-retries 2 \
+         --retry-damping-step 0.2
+```
+
+**How it works:**
+1. Run BP with initial damping
+2. If divergence detected, restart with increased damping
+3. Repeat up to `max-divergence-retries` times
+4. Select best attempt (smallest max-delta, converged if possible)
+
+<Tip>
+Retry mode is ideal for production pipelines where you want automatic recovery from numerical instability.
+</Tip>
+
+### Divergence detection
+
+The engine detects divergence using:
+
+- **NaN detection**: Immediate stop if message contains NaN/Inf
+- **Growth heuristic**: Sustained delta growth over 4 iterations
+- **Early patience**: Strict growth for N consecutive iterations
+
+### Early divergence stop
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --divergence-patience 4
+```
+
+Stops early when max-delta grows strictly for N consecutive iterations (N ≥ 3).
+
+<Warning>
+Divergence patience terminates the run immediately. Combine with `--retry-on-divergence` for automatic recovery.
+</Warning>
+
+### Divergence parameters
+
+<Accordion title="--retry-on-divergence">
+**Default:** False
+
+Enable automatic retry with increased damping when divergence is detected.
+
+**Example:** `--retry-on-divergence`
+</Accordion>
+
+<Accordion title="--max-divergence-retries INT">
+**Default:** 2
+
+Maximum restart attempts when retry-on-divergence is enabled. Must be ≥ 0.
+
+**Example:** `--max-divergence-retries 3`
+</Accordion>
+
+<Accordion title="--retry-damping-step FLOAT">
+**Default:** 0.2
+
+Damping increment between retry attempts. Must be > 0.
+
+**Example:** `--retry-damping-step 0.25`
+</Accordion>
+
+<Accordion title="--retry-with-sequential">
+**Default:** False
+
+Switch retry attempts to sequential message scheduling (Gauss-Seidel style).
+
+**Example:** `--retry-with-sequential`
+</Accordion>
+
+<Accordion title="--divergence-patience INT">
+**Default:** None (disabled)
+
+Early stop when max-delta grows strictly for N consecutive iterations. Must be ≥ 3.
+
+**Example:** `--divergence-patience 4`
+</Accordion>
+
+## Update scheduling
+
+Control message passing order for different convergence characteristics.
+
+### Synchronous (Jacobi-style)
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --update-order synchronous
+```
+
+- Computes all messages from previous iteration state
+- Updates all messages simultaneously
+- More parallel, symmetric behavior
+- **Default mode**
+
+### Sequential (Gauss-Seidel style)
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --update-order sequential
+```
+
+- Updates each message immediately
+- Subsequent messages see latest values
+- Can converge faster on some graphs
+- May help with stability
+
+<Info>
+Try sequential scheduling if synchronous BP oscillates even with damping. It can improve convergence on certain graph topologies.
+</Info>
+
+## Adaptive mixture reduction
+
+Control mixture complexity using entropy-based reduction.
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --adaptive-reduction \
+         --min-components 1
+```
+
+**How it works:**
+- Computes effective component count from ESS/entropy
+- Dynamically reduces mixture complexity when redundant
+- Respects `--min-components` lower bound
+
+<Tip>
+Adaptive reduction can improve convergence speed by preventing unnecessary component growth while preserving distributional detail where needed.
+</Tip>
+
+## Message initialization
+
+Control initial message state for faster convergence.
+
+### Evidence seeding
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --seed-messages-with-evidence
+```
+
+Initializes variable→factor messages for observed variables directly from evidence, reducing burn-in iterations.
+
+<Note>
+Evidence seeding is particularly effective on evidence-heavy graphs where multiple observations are provided.
+</Note>
+
+## Diagnostics and monitoring
+
+Understand convergence behavior through runtime diagnostics.
+
+### Runtime statistics
+
+View convergence diagnostics in logs:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" --iters 20
+```
+
+Example output:
+```
+BP diagnostics: iterations=20 max_delta=1.234e-03 converged=False 
+final_damping=0.300 oscillations=3 contraction_ratio=0.856 
+spectral_radius_proxy=0.842 stability=contractive diverging=False
+```
+
+### Stability labels
+
+- **contractive**: Spectral radius proxy < 1.0 (stable)
+- **marginal**: Spectral radius proxy ≈ 1.0 (barely stable)
+- **unstable**: Divergence detected
+- **unknown**: Insufficient data
+
+### Export diagnostics
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --stats-out artifacts/run_stats/latest.json
+```
+
+Exports full runtime stats including:
+- Iteration count and convergence status
+- Delta trace and tolerance trace
+- Damping trace
+- Oscillation count, contraction ratio, spectral radius proxy
+- Stability label and divergence flags
+- Retry attempt history (if applicable)
+- Posterior beliefs summary
+
+## Trace mode
+
+Detailed per-message iteration tracing for debugging:
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --trace-bp --iters 3
+```
+
+Shows:
+- Per-message conditioning/product steps
+- Component counts and deltas
+- Per-component breakdowns (weights, means, std devs)
+- Per-iteration posterior summaries
+- Top deltas per iteration
+- Timing information
+
+<Warning>
+Trace mode generates verbose output. Limit iterations with `--iters` and redirect stderr if needed:
+
+```bash
+gmbp run ... --trace-bp --iters 3 2> trace.log
+```
+</Warning>
+
+## Tuning strategies
+
+### Strategy 1: Start simple
+
+```bash
+# Baseline run
+gmbp run --data abalone --evidence "SHELL=0.4" --iters 20
+```
+
+Check for warnings about divergence or oscillations.
+
+### Strategy 2: Add light damping
+
+```bash
+# Add 20-30% damping
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --iters 20 --damping 0.3
+```
+
+If stable, enable early stopping.
+
+### Strategy 3: Enable auto-damping
+
+```bash
+# Adaptive damping with early stop
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --damping 0.1 --auto-damping --max-damping 0.9 \
+         --convergence-tol 1e-4 --convergence-patience 2
+```
+
+Let engine adapt to dynamics automatically.
+
+### Strategy 4: Divergence recovery
+
+```bash
+# Production-ready configuration
+gmbp run --data abalone --evidence "SHELL=0.4" \
+         --damping 0.2 \
+         --retry-on-divergence --max-divergence-retries 2 \
+         --retry-damping-step 0.2 --retry-with-sequential \
+         --divergence-patience 4 \
+         --convergence-tol 1e-4
+```
+
+Automatic recovery with fallback to sequential scheduling.
+
+## Common issues
+
+### Oscillating beliefs
+
+**Symptom:** Max delta fluctuates wildly, alternating high/low values
+
+**Solution:** Increase damping to 0.3-0.5
+
+### Slow convergence
+
+**Symptom:** Max delta decreases very slowly
+
+**Solution:** Try sequential update order or increase mixture components
+
+### Divergence
+
+**Symptom:** Max delta grows unbounded, NaN values
+
+**Solution:** Enable `--retry-on-divergence` with higher damping
+
+### Premature stopping
+
+**Symptom:** Early stop triggers but beliefs haven't converged
+
+**Solution:** Increase `--convergence-patience` or `--convergence-min-iter`
+
+## Related resources
+
+- [Schema configuration](/guides/schema-configuration) - Design factor graphs for better convergence
+- [Web visualizer](/guides/web-visualizer) - Visual step-through of message passing

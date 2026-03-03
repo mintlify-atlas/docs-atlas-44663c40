@@ -1,0 +1,300 @@
+---
+title: Gaussian mixtures
+description: Understand how Gaussian Mixture Models represent multi-modal distributions and preserve ambiguity during inference
+---
+
+Gaussian Mixture Models (GMMs) are the core representation in Fusion GMBP. Unlike standard Gaussian Belief Propagation which assumes unimodal distributions, GMMs can represent **multi-modal** posterior distributions that arise from non-linear relationships.
+
+## Why Gaussian mixtures?
+
+From the README:
+
+> Unlike standard Gaussian Belief Propagation (GaBP), which assumes linear relationships and unimodal distributions, GMBP uses Gaussian Mixtures to preserve ambiguity (e.g., "if X is observed, Y could be 5 OR 10") throughout the inference process.
+
+This multi-modality is essential when:
+- Variables have non-linear dependencies
+- Observations are ambiguous (one value of X implies multiple possible values of Y)
+- You need to preserve uncertainty until additional evidence arrives
+
+## GMM structure
+
+A Gaussian mixture is a weighted sum of Gaussian components:
+
+$$
+p(x) = \sum_{k=1}^{K} w_k \mathcal{N}(x; \mu_k, \Sigma_k)
+$$
+
+From `gmm_ops.py:16`:
+
+```python
+@dataclass
+class GMMContainer:
+    weights: np.ndarray  # Shape (K,) - component weights
+    means: np.ndarray    # Shape (K, D) - component means
+    covs: np.ndarray     # Shape (K, D, D) - component covariances
+    var_names: List[str] # List of D variable names
+    
+    @property
+    def n_components(self) -> int:
+        return len(self.weights)
+    
+    @property
+    def dim(self) -> int:
+        return len(self.var_names)
+```
+
+### Example: Bimodal distribution
+
+```python
+from gmbp import GMMContainer
+import numpy as np
+
+# Two modes: one centered at -2, another at +2
+bimodal = GMMContainer(
+    weights=np.array([0.6, 0.4]),
+    means=np.array([[-2.0], [2.0]]),
+    covs=np.array([[[0.5]], [[0.5]]]),
+    var_names=["X"]
+)
+
+print(f"Mixture has {bimodal.n_components} components")
+# Output: Mixture has 2 components
+```
+
+## GMM operations
+
+### Conditioning
+
+Conditioning a GMM on observed variables produces a new GMM over the remaining variables. This is the core operation in factor-to-variable message passing.
+
+From `gmm_ops.py:210`:
+
+```python
+def condition_gmm(
+    joint_gmm: GMMContainer,
+    obs_vars: List[str],
+    evidence: Evidence
+) -> GMMContainer:
+    """
+    Conditions a joint GMM on a subset of variables.
+    Evidence can be hard (point) or soft (mixture).
+    """
+    # For each component k in the joint and each evidence component m,
+    # apply Gaussian conditioning to get a new component
+    for k in range(joint_gmm.n_components):
+        for m in range(len(evidence.weights)):
+            mu_cond, sigma_cond, log_lik = condition_gaussian_component(
+                joint_gmm.means[k],
+                joint_gmm.covs[k],
+                obs_idx,
+                target_idx,
+                evidence.means[m],
+                evidence.covs[m]
+            )
+            # Weight update: pi_k * w_m * likelihood
+            log_w = np.log(joint_w) + np.log(ev_w) + log_lik
+```
+
+<Note>
+Conditioning can expand the number of components: if the joint has K components and evidence has M components, the result has up to K×M components. Mixture reduction keeps this manageable.
+</Note>
+
+### Multiplication (product)
+
+Multiplying two GMMs combines information from both distributions. This is used in variable-to-factor message passing.
+
+From `gmm_ops.py:319`:
+
+```python
+def multiply_gmms(gmm1: GMMContainer, gmm2: GMMContainer) -> GMMContainer:
+    """
+    Computes product of two GMMs over the SAME variables.
+    Result has K1 × K2 components (before reduction).
+    """
+    # For each pair of components, compute product Gaussian
+    for i in range(gmm1.n_components):
+        for j in range(gmm2.n_components):
+            # Precision matrices for robust inversion
+            P1 = _safe_precision(gmm1.covs[i])
+            P2 = _safe_precision(gmm2.covs[j])
+            
+            # Product parameters
+            P3 = P1 + P2
+            cov3 = _safe_precision(P3)  # Invert precision back to covariance
+            mu3 = cov3 @ (P1 @ mu1 + P2 @ mu2)
+            
+            # Weight update: Z = N(mu1; mu2, cov1 + cov2)
+            log_z = multivariate_normal.logpdf(mu1, mean=mu2, cov=cov1 + cov2)
+            log_weights.append(np.log(w1) + np.log(w2) + log_z)
+```
+
+<Info>
+The product of two Gaussians is another Gaussian with precision (inverse covariance) equal to the sum of precisions. This is computed in log-space for numerical stability.
+</Info>
+
+### Marginalization
+
+Marginalization projects a GMM to a subset of variables by simply extracting the relevant dimensions.
+
+From `gmm_ops.py:298`:
+
+```python
+def marginalize_gmm(gmm: GMMContainer, keep_vars: List[str]) -> GMMContainer:
+    """Project GMM to a subset of variables."""
+    keep_idx = [var_to_idx[v] for v in keep_vars]
+    
+    # Slice means and covariances
+    new_means = gmm.means[:, keep_idx]
+    new_covs = gmm.covs[:, keep_idx][:, :, keep_idx]
+    
+    return GMMContainer(
+        weights=gmm.weights.copy(),
+        means=new_means,
+        covs=new_covs,
+        var_names=keep_vars
+    )
+```
+
+## Mixture reduction
+
+As messages propagate, the number of components can grow exponentially. **Mixture reduction** approximates a large mixture with fewer components while preserving the distribution.
+
+From `gmm_ops.py:467`:
+
+```python
+def reduce_gmm(
+    gmm: GMMContainer,
+    max_components: int,
+    adaptive: bool = False,
+    min_components: int = 1
+) -> GMMContainer:
+    """Reduce mixture to at most max_components using weighted KMeans."""
+    if gmm.n_components <= max_components:
+        return gmm
+    
+    # Use KMeans to cluster components by their means
+    kmeans = KMeans(n_clusters=max_components, random_state=42)
+    labels = kmeans.fit_predict(gmm.means, sample_weight=gmm.weights)
+    
+    # Merge components in each cluster
+    for cluster_idx in range(max_components):
+        indices = np.where(labels == cluster_idx)[0]
+        comp_weights = gmm.weights[indices]
+        total_weight = np.sum(comp_weights)
+        
+        # Merged mean (weighted average)
+        merged_mean = np.sum(comp_means * rel_weights[:, np.newaxis], axis=0)
+        
+        # Merged covariance (includes spread between merged components)
+        merged_cov = np.sum(rel_weights[i] * (comp_covs[i] + np.outer(diff, diff)))
+```
+
+### Adaptive reduction
+
+Adaptive reduction automatically determines the number of components based on weight concentration:
+
+```python
+reduced = reduce_gmm(
+    gmm,
+    max_components=20,
+    adaptive=True,
+    min_components=1
+)
+```
+
+From `gmm_ops.py:432`:
+
+```python
+def adaptive_component_cap(
+    weights: np.ndarray,
+    max_components: int,
+    min_components: int = 1
+) -> int:
+    """
+    Compute adaptive cap from weight concentration.
+    Uses effective sample size (1 / sum(w^2)) and
+    entropy support (exp(-sum(w log w))).
+    """
+    w = weights / np.sum(weights)
+    n_eff = 1.0 / np.sum(w * w)
+    h = -np.sum(w * np.log(w))
+    support_entropy = np.exp(h)
+    
+    # Geometric mean of the two signals
+    target = int(np.ceil(np.sqrt(n_eff * support_entropy)))
+    return max(min_components, min(max_components, target))
+```
+
+<Tip>
+Adaptive reduction is useful when some variables naturally have fewer modes than others. It prevents over-reduction of truly multi-modal distributions.
+</Tip>
+
+## Numerical stability
+
+GMM operations require careful numerical handling to avoid singular covariances and underflow.
+
+### PSD projection
+
+From `gmm_ops.py:60`:
+
+```python
+def _project_to_psd(cov: np.ndarray, min_eig: float = 1e-12) -> np.ndarray:
+    """
+    Project symmetric matrix to PSD by flooring eigenvalues.
+    Guards against tiny negative eigenvalues from floating-point errors.
+    """
+    cov_sym = 0.5 * (cov + cov.T)
+    eigvals, eigvecs = np.linalg.eigh(cov_sym)
+    eigvals = np.maximum(eigvals, min_eig)
+    return eigvecs @ np.diag(eigvals) @ eigvecs.T
+```
+
+### Safe precision inversion
+
+From `gmm_ops.py:72`:
+
+```python
+def _safe_precision(cov: np.ndarray, base_jitter: float = 1e-10) -> np.ndarray:
+    """
+    Return numerically stable inverse covariance (precision).
+    Uses jitter ladder before falling back to pseudo-inverse.
+    """
+    for scale in (1.0, 1e2, 1e4, 1e6):
+        try:
+            return np.linalg.inv(cov + np.eye(cov.shape[0]) * (base_jitter * scale))
+        except np.linalg.LinAlgError:
+            continue
+    return np.linalg.pinv(cov + np.eye(cov.shape[0]) * base_jitter)
+```
+
+<Warning>
+From the README: "Near-singular covariance cases in GMM products are handled with robust precision inversion (jitter ladder + pseudo-inverse fallback) to avoid loopy-BP numerical blowups."
+</Warning>
+
+## Multi-modality in practice
+
+Consider a pairwise factor between `SHELL` and `RINGS` in the abalone dataset. If we observe `SHELL=0.5`, the posterior for `RINGS` might be bimodal:
+
+```python
+from gmbp import BPEngine, Evidence
+
+engine = BPEngine(factors, neighbors, factor_scopes, evidence={
+    "SHELL": Evidence.from_hard([0.5])
+})
+
+engine.initialize_messages()
+engine.run(max_iter=10, max_components=20)
+
+beliefs = engine.compute_beliefs()
+rings_belief = beliefs["RINGS"]
+
+print(f"RINGS belief has {rings_belief.n_components} components")
+# Output might be: RINGS belief has 8 components
+
+# Each component represents a mode in the posterior
+for k in range(rings_belief.n_components):
+    print(f"  Component {k}: w={rings_belief.weights[k]:.3f}, "
+          f"μ={rings_belief.means[k, 0]:.2f}")
+```
+
+This multi-modal representation preserves the ambiguity: given the shell weight, the number of rings could fall into several distinct ranges with different probabilities.

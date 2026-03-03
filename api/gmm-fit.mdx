@@ -1,0 +1,219 @@
+---
+title: GMM fitting and persistence
+description: Functions for fitting Gaussian mixture models to data and saving/loading factor models
+---
+
+Functions for training GMM factors from data and persisting them to disk.
+
+## fit_joint_gmm
+
+Fits a full-covariance Gaussian mixture model to the provided data matrix.
+
+```python
+from gmbp.gmm_fit import fit_joint_gmm
+import numpy as np
+
+# Example: Fit a 3-component GMM to 2D data
+X = np.random.randn(1000, 2)
+container, nll = fit_joint_gmm(
+    X=X,
+    K=3,
+    seed=42,
+    var_names=["x", "y"]
+)
+
+print(f"Fitted {container.n_components} components")
+print(f"Average negative log-likelihood: {nll:.4f}")
+```
+
+### Parameters
+
+<ParamField path="X" type="np.ndarray" required>
+  Data matrix of shape `(N, D)` where N is the number of samples and D is the dimensionality.
+</ParamField>
+
+<ParamField path="K" type="int" required>
+  Number of mixture components. Must be >= 1.
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random seed for reproducible initialization.
+</ParamField>
+
+<ParamField path="var_names" type="List[str]" default="None">
+  List of variable names corresponding to columns of X. If None, generates names like `["dim_0", "dim_1", ...]`.
+</ParamField>
+
+### Returns
+
+<ResponseField name="container" type="GMMContainer">
+  A GMMContainer holding the fitted mixture parameters:
+  - `weights`: Component weights of shape `(K,)`
+  - `means`: Component means of shape `(K, D)`
+  - `covs`: Component covariances of shape `(K, D, D)`
+  - `var_names`: List of variable names
+</ResponseField>
+
+<ResponseField name="nll" type="float">
+  Average negative log-likelihood per sample (lower is better).
+</ResponseField>
+
+<Note>
+  The function uses scikit-learn's `GaussianMixture` with full covariance matrices and automatic regularization (`reg_covar=1e-6`) to ensure numerical stability.
+</Note>
+
+---
+
+## save_factor
+
+Saves a GMM container to disk as a compressed `.npz` file.
+
+```python
+from gmbp.gmm_fit import save_factor
+
+# Save the fitted model
+save_factor(
+    gmm=container,
+    factor_name="joint_xy",
+    nll=nll
+)
+# Saves to: <FACTORS_DIR>/joint_xy_K3.npz
+```
+
+### Parameters
+
+<ParamField path="gmm" type="GMMContainer" required>
+  The GMM container to save.
+</ParamField>
+
+<ParamField path="factor_name" type="str" required>
+  Base name for the factor file. The filename will be `{factor_name}_K{n_components}.npz`.
+</ParamField>
+
+<ParamField path="nll" type="float" default="0.0">
+  Negative log-likelihood to store with the model (optional metadata).
+</ParamField>
+
+<ParamField path="directory" type="Optional[Path]" default="None">
+  Directory to save the factor in. If None, uses the configured `FACTORS_DIR` from project settings.
+</ParamField>
+
+<Info>
+  The directory is created automatically if it doesn't exist.
+</Info>
+
+---
+
+## load_factor
+
+Loads a GMM container from disk.
+
+```python
+from gmbp.gmm_fit import load_factor
+
+# Load a previously saved factor
+loaded_gmm = load_factor(
+    factor_name="joint_xy",
+    K=3
+)
+
+print(f"Loaded GMM with variables: {loaded_gmm.var_names}")
+print(f"Number of components: {loaded_gmm.n_components}")
+```
+
+### Parameters
+
+<ParamField path="factor_name" type="str" required>
+  Base name of the factor file (without the `_K{n}.npz` suffix).
+</ParamField>
+
+<ParamField path="K" type="int" required>
+  Number of components in the saved model. Used to construct the filename.
+</ParamField>
+
+<ParamField path="directory" type="Optional[Path]" default="None">
+  Directory to load from. If None, uses the configured `FACTORS_DIR`.
+</ParamField>
+
+### Returns
+
+<ResponseField name="gmm" type="GMMContainer">
+  The reconstructed GMM container with all parameters and variable names.
+</ResponseField>
+
+### Errors
+
+<Warning>
+  Raises `FileNotFoundError` if the specified factor file does not exist.
+</Warning>
+
+---
+
+## configure_gaussian_mixture
+
+Returns a configured scikit-learn `GaussianMixture` estimator with project defaults.
+
+```python
+from gmbp.gmm_fit import configure_gaussian_mixture
+
+gmm_estimator = configure_gaussian_mixture(K=5, seed=123)
+gmm_estimator.fit(X)
+```
+
+### Parameters
+
+<ParamField path="K" type="int" required>
+  Number of components. Must be >= 1.
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random state for reproducibility.
+</ParamField>
+
+### Returns
+
+<ResponseField name="estimator" type="GaussianMixture">
+  A configured scikit-learn `GaussianMixture` object ready for fitting.
+</ResponseField>
+
+<Note>
+  - For `K=1`: Uses `n_init=1` and `max_iter=100` (no initialization needed)
+  - For `K>1`: Uses `n_init=10`, `max_iter=300`, and `reg_covar=1e-6` for robust fitting
+  - Always uses `covariance_type="full"` for maximum expressiveness
+</Note>
+
+---
+
+## train_gaussian_mixture
+
+Fits and returns the raw scikit-learn `GaussianMixture` estimator for downstream analysis.
+
+```python
+from gmbp.gmm_fit import train_gaussian_mixture
+
+model = train_gaussian_mixture(X, K=3, seed=42)
+
+# Access scikit-learn attributes directly
+print(model.bic(X))  # Bayesian Information Criterion
+print(model.aic(X))  # Akaike Information Criterion
+```
+
+### Parameters
+
+<ParamField path="X" type="np.ndarray" required>
+  Data matrix of shape `(N, D)`.
+</ParamField>
+
+<ParamField path="K" type="int" required>
+  Number of components.
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random seed.
+</ParamField>
+
+### Returns
+
+<ResponseField name="model" type="GaussianMixture">
+  A fitted scikit-learn `GaussianMixture` object.
+</ResponseField>

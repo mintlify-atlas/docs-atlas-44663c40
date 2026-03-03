@@ -1,0 +1,392 @@
+---
+title: Benchmark reporting
+description: Functions for generating structured benchmark reports comparing belief propagation methods
+---
+
+The benchmark_report module provides utilities for comparing GMBP (Gaussian Mixture Belief Propagation) against baseline methods like GaBP (Gaussian Belief Propagation), including complexity analysis, KL divergence computation, and markdown report generation.
+
+## Data classes
+
+### BeliefComplexitySummary
+
+Summarizes the complexity of posterior beliefs across all variables.
+
+<ResponseField name="n_variables" type="int">
+  Total number of variables in the belief set
+</ResponseField>
+
+<ResponseField name="total_components" type="int">
+  Sum of mixture components across all variables
+</ResponseField>
+
+<ResponseField name="mean_components" type="float">
+  Average number of components per variable
+</ResponseField>
+
+<ResponseField name="max_components_var" type="str">
+  Name of the variable with the most mixture components
+</ResponseField>
+
+<ResponseField name="max_components" type="int">
+  Maximum number of components in any single variable
+</ResponseField>
+
+### ComparisonRow
+
+Stores per-variable comparison metrics between two belief sets.
+
+<ResponseField name="variable" type="str">
+  Name of the variable being compared
+</ResponseField>
+
+<ResponseField name="mean_gmbp" type="float">
+  Mean (first moment) of the GMBP posterior belief
+</ResponseField>
+
+<ResponseField name="std_gmbp" type="float">
+  Standard deviation of the GMBP posterior belief
+</ResponseField>
+
+<ResponseField name="mean_baseline" type="float">
+  Mean (first moment) of the baseline posterior belief
+</ResponseField>
+
+<ResponseField name="std_baseline" type="float">
+  Standard deviation of the baseline posterior belief
+</ResponseField>
+
+<ResponseField name="kl_gmbp_to_baseline" type="float">
+  Approximate KL divergence from GMBP to baseline distribution
+</ResponseField>
+
+## Functions
+
+### build_comparison_rows
+
+```python
+def build_comparison_rows(
+    variables: list[str],
+    beliefs_complex: dict[str, GMMContainer],
+    beliefs_baseline: dict[str, GMMContainer],
+    evidence_var: str
+) -> list[ComparisonRow]
+```
+
+Builds per-variable comparison rows for two sets of beliefs, excluding the evidence variable.
+
+<ParamField path="variables" type="list[str]" required>
+  List of all variable names to compare
+</ParamField>
+
+<ParamField path="beliefs_complex" type="dict[str, GMMContainer]" required>
+  Dictionary mapping variable names to their GMBP posterior beliefs (Gaussian mixture distributions)
+</ParamField>
+
+<ParamField path="beliefs_baseline" type="dict[str, GMMContainer]" required>
+  Dictionary mapping variable names to their baseline posterior beliefs (typically from GaBP)
+</ParamField>
+
+<ParamField path="evidence_var" type="str" required>
+  Name of the evidence variable to exclude from comparison
+</ParamField>
+
+<ResponseField name="return" type="list[ComparisonRow]">
+  List of ComparisonRow objects, one for each non-evidence variable
+</ResponseField>
+
+<Note>
+  The evidence variable is excluded because it has an observed value and doesn't have a posterior distribution to compare.
+</Note>
+
+#### Example
+
+```python
+from gmbp.benchmark_report import build_comparison_rows
+from gmbp.inference import run_gmbp_inference
+
+# Assume we have two belief sets from different inference methods
+variables = ['age', 'height', 'weight', 'rings']
+beliefs_gmbp = run_gmbp_inference(...)  # Returns dict[str, GMMContainer]
+beliefs_gabp = run_gabp_inference(...)  # Returns dict[str, GMMContainer]
+
+# Compare all variables except the evidence
+rows = build_comparison_rows(
+    variables=variables,
+    beliefs_complex=beliefs_gmbp,
+    beliefs_baseline=beliefs_gabp,
+    evidence_var='rings'
+)
+
+# Print comparison for each variable
+for row in rows:
+    print(f"{row.variable}: KL={row.kl_gmbp_to_baseline:.6f}, "
+          f"mean_diff={abs(row.mean_gmbp - row.mean_baseline):.4f}")
+```
+
+---
+
+### summarize_rows
+
+```python
+def summarize_rows(
+    rows: list[ComparisonRow]
+) -> dict[str, float | str | int]
+```
+
+Aggregates comparison rows into summary statistics.
+
+<ParamField path="rows" type="list[ComparisonRow]" required>
+  List of ComparisonRow objects to summarize
+</ParamField>
+
+<ResponseField name="return" type="dict[str, float | str | int]">
+  Dictionary containing:
+  - `n_variables` (int): Number of variables compared
+  - `max_kl_var` (str): Variable with the highest KL divergence
+  - `max_kl` (float): Maximum KL divergence value
+  - `mean_kl` (float): Average KL divergence across all variables
+</ResponseField>
+
+<Info>
+  If the input list is empty, returns a dictionary with n_variables=0, empty string for max_kl_var, and 0.0 for both KL metrics.
+</Info>
+
+#### Example
+
+```python
+from gmbp.benchmark_report import build_comparison_rows, summarize_rows
+
+# Build comparison rows (from previous example)
+rows = build_comparison_rows(...)
+
+# Get summary statistics
+summary = summarize_rows(rows)
+
+print(f"Compared {summary['n_variables']} variables")
+print(f"Variable with highest divergence: {summary['max_kl_var']}")
+print(f"Max KL divergence: {summary['max_kl']:.6f}")
+print(f"Mean KL divergence: {summary['mean_kl']:.6f}")
+
+# Assess overall agreement
+if summary['mean_kl'] < 0.01:
+    print("Excellent agreement between methods")
+elif summary['mean_kl'] < 0.1:
+    print("Good agreement between methods")
+else:
+    print(f"Significant divergence - investigate {summary['max_kl_var']}")
+```
+
+---
+
+### summarize_belief_complexity
+
+```python
+def summarize_belief_complexity(
+    beliefs: dict[str, GMMContainer]
+) -> BeliefComplexitySummary
+```
+
+Computes complexity metrics for a set of posterior beliefs.
+
+<ParamField path="beliefs" type="dict[str, GMMContainer]" required>
+  Dictionary mapping variable names to their posterior beliefs (Gaussian mixtures)
+</ParamField>
+
+<ResponseField name="return" type="BeliefComplexitySummary">
+  Summary object containing component counts and statistics
+</ResponseField>
+
+<Note>
+  Higher component counts indicate more complex multimodal posteriors. This can be useful for understanding computational costs and model expressiveness.
+</Note>
+
+#### Example
+
+```python
+from gmbp.benchmark_report import summarize_belief_complexity
+from gmbp.inference import run_gmbp_inference
+
+# Get posterior beliefs from inference
+beliefs = run_gmbp_inference(...)  # Returns dict[str, GMMContainer]
+
+# Analyze complexity
+complexity = summarize_belief_complexity(beliefs)
+
+print(f"Total variables: {complexity.n_variables}")
+print(f"Total mixture components: {complexity.total_components}")
+print(f"Average components per variable: {complexity.mean_components:.2f}")
+print(f"Most complex variable: {complexity.max_components_var} "
+      f"with {complexity.max_components} components")
+
+# Convert to dict for JSON serialization
+data = complexity.to_dict()
+with open('complexity_stats.json', 'w') as f:
+    json.dump(data, f, indent=2)
+```
+
+---
+
+### render_benchmark_markdown
+
+```python
+def render_benchmark_markdown(
+    *,
+    run_dir: str,
+    evidence_var: str,
+    evidence_val: float,
+    comparison_summary: dict[str, float | str | int],
+    comparison_rows: list[ComparisonRow],
+    stats_complex: dict[str, Any],
+    stats_baseline: dict[str, Any],
+    stats_soft: dict[str, Any],
+    pairwise_only: bool,
+    dropped_factors: list[str]
+) -> str
+```
+
+Renders a compact, auditable markdown summary for one benchmark run comparing GMBP variants against baseline methods.
+
+<ParamField path="run_dir" type="str" required>
+  Directory path where benchmark results are stored
+</ParamField>
+
+<ParamField path="evidence_var" type="str" required>
+  Name of the variable that was observed/conditioned on
+</ParamField>
+
+<ParamField path="evidence_val" type="float" required>
+  Observed value for the evidence variable
+</ParamField>
+
+<ParamField path="comparison_summary" type="dict[str, float | str | int]" required>
+  Summary statistics from `summarize_rows()` containing KL divergence metrics
+</ParamField>
+
+<ParamField path="comparison_rows" type="list[ComparisonRow]" required>
+  Per-variable comparison data from `build_comparison_rows()`
+</ParamField>
+
+<ParamField path="stats_complex" type="dict[str, Any]" required>
+  Statistics dictionary for the complex GMBP model containing:
+  - `runtime_sec`: Inference runtime in seconds
+  - `bp`: Belief propagation metadata (iterations, converged, stability_label)
+  - `belief_complexity`: Output from `summarize_belief_complexity()`
+</ParamField>
+
+<ParamField path="stats_baseline" type="dict[str, Any]" required>
+  Statistics dictionary for the baseline GaBP model (same structure as stats_complex)
+</ParamField>
+
+<ParamField path="stats_soft" type="dict[str, Any]" required>
+  Statistics dictionary for the soft evidence GMBP model (same structure as stats_complex)
+</ParamField>
+
+<ParamField path="pairwise_only" type="bool" required>
+  Whether the benchmark used only pairwise factors (dropping higher-order factors)
+</ParamField>
+
+<ParamField path="dropped_factors" type="list[str]" required>
+  List of factor names that were dropped when pairwise_only=True
+</ParamField>
+
+<ResponseField name="return" type="str">
+  Formatted markdown report as a string, including timestamp, configuration, KL summary, runtime comparison, and per-variable results table
+</ResponseField>
+
+<Info>
+  The generated markdown includes a formatted table showing means, standard deviations, and KL divergences for easy visual comparison.
+</Info>
+
+#### Example
+
+```python
+from gmbp.benchmark_report import (
+    build_comparison_rows,
+    summarize_rows,
+    summarize_belief_complexity,
+    render_benchmark_markdown
+)
+
+# Assume we've run three inference methods
+beliefs_gmbp = run_gmbp_inference(...)
+beliefs_gabp = run_gabp_inference(...)
+beliefs_soft = run_soft_evidence_inference(...)
+
+# Build comparison data
+rows = build_comparison_rows(
+    variables=['age', 'height', 'weight', 'rings'],
+    beliefs_complex=beliefs_gmbp,
+    beliefs_baseline=beliefs_gabp,
+    evidence_var='rings'
+)
+summary = summarize_rows(rows)
+
+# Prepare statistics for each method
+stats_complex = {
+    'runtime_sec': 1.234,
+    'bp': {'iterations': 15, 'converged': True, 'stability_label': 'stable'},
+    'belief_complexity': summarize_belief_complexity(beliefs_gmbp).to_dict()
+}
+stats_baseline = {
+    'runtime_sec': 0.456,
+    'bp': {'iterations': 12, 'converged': True, 'stability_label': 'stable'},
+    'belief_complexity': summarize_belief_complexity(beliefs_gabp).to_dict()
+}
+stats_soft = {
+    'runtime_sec': 1.456,
+    'bp': {'iterations': 18, 'converged': True, 'stability_label': 'stable'},
+    'belief_complexity': summarize_belief_complexity(beliefs_soft).to_dict()
+}
+
+# Generate markdown report
+report = render_benchmark_markdown(
+    run_dir='./results/abalone_2026_03_03',
+    evidence_var='rings',
+    evidence_val=10.0,
+    comparison_summary=summary,
+    comparison_rows=rows,
+    stats_complex=stats_complex,
+    stats_baseline=stats_baseline,
+    stats_soft=stats_soft,
+    pairwise_only=False,
+    dropped_factors=[]
+)
+
+# Save report
+with open('benchmark_report.md', 'w') as f:
+    f.write(report)
+
+print("Benchmark report saved!")
+```
+
+#### Sample output
+
+The generated markdown report will look like:
+
+```markdown
+# Abalone Benchmark Summary
+
+- Generated: 2026-03-03 14:30:00 UTC
+- Run directory: `./results/abalone_2026_03_03`
+- Evidence: `rings = 10.0`
+- Pairwise-only: `False`
+
+## KL Summary
+
+- Variables compared: 3
+- Max KL variable: `age`
+- Max KL (GMBP||Baseline): 0.045231
+- Mean KL (GMBP||Baseline): 0.023145
+
+## Runtime + Posterior Complexity
+
+### Complex (GMBP)
+- Runtime (sec): 1.2340
+- Iterations: 15
+- Converged: True
+- Stability: `stable`
+- Total posterior components: 45
+- Mean posterior components: 15.000
+
+...
+```

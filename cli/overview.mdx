@@ -1,0 +1,171 @@
+---
+title: CLI overview
+description: Command-line interface for Fusion GMBP with common options and setup
+---
+
+The Fusion GMBP library provides a comprehensive command-line interface through the `gmbp` command. The CLI includes four main subcommands for model training, inference, and complexity analysis.
+
+## Installation
+
+The CLI is included with the Fusion GMBP package. Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv venv
+uv pip install -e ".[dev]"
+```
+
+## Available commands
+
+The `gmbp` CLI provides four subcommands:
+
+<CardGroup cols={2}>
+  <Card title="fit" icon="circle-nodes" href="/cli/fit">
+    Fit GMM factors from dataset by learning joint probability distributions
+  </Card>
+  <Card title="run" icon="play" href="/cli/run">
+    Run belief propagation inference with evidence to compute posterior beliefs
+  </Card>
+  <Card title="analyze" icon="chart-line" href="/cli/analyze">
+    Analyze model complexity with NLL vs. K sweeps for individual factors
+  </Card>
+  <Card title="analyze-schema" icon="diagram-project" href="/cli/analyze-schema">
+    Run complexity sweeps for all factors in a schema with aggregated results
+  </Card>
+</CardGroup>
+
+## Common options
+
+These options are available across multiple commands:
+
+### Schema and data resolution
+
+<ParamField path="--schema" type="string">
+  Schema name or path to schema JSON file. If omitted, defaults to `<data>.json` inside the resolved dataset folder, falling back to `schema.json` for compatibility.
+  
+  Examples:
+  - `--schema abalone` (resolves to `data/abalone/abalone.json` or `schema.json`)
+  - `--schema schema_nd` (resolves to `data/abalone/schema_nd.json` when used with `--data abalone`)
+  - `--schema data/abalone/custom.json` (explicit path)
+</ParamField>
+
+<ParamField path="--data" type="string">
+  Dataset name or path to input CSV / dataset folder. Resolves dataset folder from `./data/<dataname>/` first.
+  
+  Examples:
+  - `--data abalone` (resolves to `data/abalone/`)
+  - `--data circular_factory`
+</ParamField>
+
+<ParamField path="--components" type="integer">
+  Override number of GMM components per factor. Short form: `-K`
+  
+  If not specified, uses `n_components` from the schema factor definition, or defaults to 10.
+</ParamField>
+
+<ParamField path="--strict-pairwise" type="boolean">
+  Enforce pairwise-only factors. Schema validation fails if any factor scope contains more than 2 variables.
+  
+  Available on: `fit`, `run`, `analyze`, `analyze-schema`
+</ParamField>
+
+<ParamField path="--seed" type="integer" default="42">
+  Random seed for reproducibility. Ensures deterministic GMM fitting and train/validation splits.
+  
+  Available on: `fit`, `analyze`, `analyze-schema`
+</ParamField>
+
+### Logging and output
+
+<ParamField path="--verbose" type="boolean">
+  Enable verbose logging (DEBUG level). Short form: `-v`
+  
+  Shows detailed progress information including:
+  - Data loading steps
+  - Factor fitting progress
+  - Message passing details
+  - Convergence diagnostics
+</ParamField>
+
+## Environment setup
+
+### Using uv run (recommended)
+
+All commands can be run with `uv run` to ensure they target the project environment:
+
+```bash
+uv run gmbp --help
+uv run gmbp fit --data abalone
+uv run gmbp run --schema abalone --evidence "SHELL=0.5"
+```
+
+### Activating the virtual environment
+
+Alternatively, activate the environment to use `gmbp` directly:
+
+<CodeGroup>
+```bash macOS / Linux
+source .venv/bin/activate
+gmbp --help
+```
+
+```powershell Windows
+.venv\Scripts\Activate.ps1
+gmbp --help
+```
+</CodeGroup>
+
+## Workflow overview
+
+A typical GMBP workflow involves three steps:
+
+<Steps>
+  <Step title="Fit factors from data">
+    Train GMM factors that learn the joint distributions:
+    ```bash
+    gmbp fit --data abalone --components 10
+    ```
+  </Step>
+  
+  <Step title="Run inference with evidence">
+    Propagate evidence through the graph:
+    ```bash
+    gmbp run --data abalone --evidence "SHELL=0.5" --evidence "RINGS=9"
+    ```
+  </Step>
+  
+  <Step title="Analyze results (optional)">
+    Evaluate model complexity and fit quality:
+    ```bash
+    gmbp analyze --schema abalone --factor f_len_diam_whole --max-k 20
+    ```
+  </Step>
+</Steps>
+
+## Getting help
+
+View help for any command:
+
+```bash
+gmbp --help                    # Main help
+gmbp fit --help                # fit command options
+gmbp run --help                # run command options
+gmbp analyze --help            # analyze command options
+gmbp analyze-schema --help     # analyze-schema command options
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Fit command" icon="circle-nodes" href="/cli/fit">
+    Learn how to train GMM factors from your dataset
+  </Card>
+  <Card title="Run command" icon="play" href="/cli/run">
+    Perform inference with belief propagation
+  </Card>
+  <Card title="Trace mode" icon="bug" href="/cli/trace-mode">
+    Debug inference with detailed per-message tracing
+  </Card>
+  <Card title="Schema format" icon="file-code" href="/concepts/graph-schema">
+    Understand schema structure and configuration
+  </Card>
+</CardGroup>

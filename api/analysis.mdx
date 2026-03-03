@@ -1,0 +1,328 @@
+---
+title: Complexity analysis
+description: Functions for analyzing Gaussian mixture model complexity across different component counts
+---
+
+The analysis module provides tools for evaluating GMM complexity by fitting models with varying numbers of components (K) and measuring negative log-likelihood (NLL) and runtime performance.
+
+## Data classes
+
+### ComplexityResult
+
+Stores results from a single complexity analysis run.
+
+<ResponseField name="k" type="int">
+  Number of mixture components used in this run
+</ResponseField>
+
+<ResponseField name="nll" type="float">
+  Negative log-likelihood of the fitted model
+</ResponseField>
+
+<ResponseField name="runtime" type="float">
+  Time elapsed during model fitting (in seconds)
+</ResponseField>
+
+### ComplexityHoldoutResult
+
+Stores results from complexity analysis with train/validation splits.
+
+<ResponseField name="k" type="int">
+  Number of mixture components used in this run
+</ResponseField>
+
+<ResponseField name="train_nll" type="float">
+  Negative log-likelihood on the training set
+</ResponseField>
+
+<ResponseField name="val_nll" type="float">
+  Negative log-likelihood on the validation set
+</ResponseField>
+
+<ResponseField name="runtime" type="float">
+  Time elapsed during model fitting (in seconds)
+</ResponseField>
+
+### AggregatedComplexitySummary
+
+Aggregated statistics across multiple complexity sweeps.
+
+<ResponseField name="k_values" type="List[int]">
+  List of K values tested across all sweeps
+</ResponseField>
+
+<ResponseField name="primary_mean" type="List[float]">
+  Mean of primary metric (val_nll or nll) for each K
+</ResponseField>
+
+<ResponseField name="primary_std" type="List[float]">
+  Standard deviation of primary metric for each K
+</ResponseField>
+
+<ResponseField name="primary_metric" type="str">
+  Name of the primary metric ("val_nll" or "nll")
+</ResponseField>
+
+<ResponseField name="secondary_mean" type="List[float] | None">
+  Mean of secondary metric (train_nll) for each K, if using holdout
+</ResponseField>
+
+<ResponseField name="secondary_std" type="List[float] | None">
+  Standard deviation of secondary metric for each K, if using holdout
+</ResponseField>
+
+<ResponseField name="secondary_metric" type="str | None">
+  Name of the secondary metric ("train_nll") or None
+</ResponseField>
+
+<ResponseField name="best_k" type="int">
+  K value with the lowest primary metric mean
+</ResponseField>
+
+## Functions
+
+### analyze_complexity
+
+```python
+def analyze_complexity(
+    X: np.ndarray,
+    k_min: int = 1,
+    k_max: int = 20,
+    seed: int = 42
+) -> List[ComplexityResult]
+```
+
+Fits Gaussian Mixture Models for a range of component counts (K) and records NLL and runtime for each configuration.
+
+<ParamField path="X" type="np.ndarray" required>
+  Data matrix with shape (N, D) where N is the number of samples and D is the number of dimensions
+</ParamField>
+
+<ParamField path="k_min" type="int" default="1">
+  Minimum number of components to test
+</ParamField>
+
+<ParamField path="k_max" type="int" default="20">
+  Maximum number of components to test
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random seed for reproducibility
+</ParamField>
+
+<ResponseField name="return" type="List[ComplexityResult]">
+  List of ComplexityResult objects, one for each K value from k_min to k_max
+</ResponseField>
+
+<Note>
+  This function fits GMMs sequentially for each K value. For large datasets or wide K ranges, this can be time-consuming.
+</Note>
+
+#### Example
+
+```python
+import numpy as np
+from gmbp.analysis import analyze_complexity
+
+# Generate sample data
+X = np.random.randn(1000, 5)
+
+# Analyze complexity for K from 1 to 10
+results = analyze_complexity(X, k_min=1, k_max=10, seed=42)
+
+# Find the K with lowest NLL
+best_result = min(results, key=lambda r: r.nll)
+print(f"Best K: {best_result.k}, NLL: {best_result.nll:.4f}")
+
+# Plot NLL vs K
+import matplotlib.pyplot as plt
+k_values = [r.k for r in results]
+nll_values = [r.nll for r in results]
+plt.plot(k_values, nll_values)
+plt.xlabel('Number of Components (K)')
+plt.ylabel('Negative Log-Likelihood')
+plt.show()
+```
+
+---
+
+### split_matrix
+
+```python
+def split_matrix(
+    X: np.ndarray,
+    holdout_fraction: float,
+    seed: int = 42
+) -> tuple[np.ndarray, np.ndarray]
+```
+
+Splits a data matrix into train and validation partitions with deterministic shuffling.
+
+<ParamField path="X" type="np.ndarray" required>
+  Data matrix with shape (N, D) to split. Must be 2-dimensional with at least 2 samples.
+</ParamField>
+
+<ParamField path="holdout_fraction" type="float" required>
+  Fraction of data to use for validation. Must be in the range (0, 1).
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random seed for reproducible shuffling
+</ParamField>
+
+<ResponseField name="return" type="tuple[np.ndarray, np.ndarray]">
+  Tuple of (X_train, X_val) with the same number of features as input X
+</ResponseField>
+
+<Info>
+  The function ensures at least one sample in each split, even if the holdout fraction would result in an empty set.
+</Info>
+
+#### Example
+
+```python
+import numpy as np
+from gmbp.analysis import split_matrix
+
+# Create a dataset
+X = np.random.randn(200, 3)
+
+# Split into 80% train, 20% validation
+X_train, X_val = split_matrix(X, holdout_fraction=0.2, seed=42)
+
+print(f"Training set: {X_train.shape}")
+print(f"Validation set: {X_val.shape}")
+# Output: Training set: (160, 3)
+#         Validation set: (40, 3)
+```
+
+---
+
+### analyze_complexity_split
+
+```python
+def analyze_complexity_split(
+    X_train: np.ndarray,
+    X_val: np.ndarray,
+    k_min: int = 1,
+    k_max: int = 20,
+    seed: int = 42
+) -> List[ComplexityHoldoutResult]
+```
+
+Runs complexity analysis with explicit train/validation splits. Models are trained on X_train and evaluated on both X_train and X_val.
+
+<ParamField path="X_train" type="np.ndarray" required>
+  Training data matrix with shape (N_train, D). Must be 2-dimensional.
+</ParamField>
+
+<ParamField path="X_val" type="np.ndarray" required>
+  Validation data matrix with shape (N_val, D). Must be 2-dimensional and have the same number of features as X_train.
+</ParamField>
+
+<ParamField path="k_min" type="int" default="1">
+  Minimum number of components to test. Must be at least 1.
+</ParamField>
+
+<ParamField path="k_max" type="int" default="20">
+  Maximum number of components to test. Must be >= k_min.
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random seed for reproducibility
+</ParamField>
+
+<ResponseField name="return" type="List[ComplexityHoldoutResult]">
+  List of ComplexityHoldoutResult objects with both training and validation NLL for each K
+</ResponseField>
+
+<Note>
+  Use this function to detect overfitting: if train_nll continues decreasing while val_nll increases, the model is overfitting.
+</Note>
+
+#### Example
+
+```python
+import numpy as np
+from gmbp.analysis import split_matrix, analyze_complexity_split
+
+# Generate and split data
+X = np.random.randn(500, 4)
+X_train, X_val = split_matrix(X, holdout_fraction=0.2, seed=42)
+
+# Analyze complexity with holdout validation
+results = analyze_complexity_split(
+    X_train, X_val,
+    k_min=1, k_max=15,
+    seed=42
+)
+
+# Find K with best validation NLL
+best_k = min(results, key=lambda r: r.val_nll).k
+print(f"Best K by validation NLL: {best_k}")
+
+# Check for overfitting
+for r in results:
+    if r.val_nll > r.train_nll * 1.1:  # 10% worse on validation
+        print(f"K={r.k} may be overfitting: train={r.train_nll:.2f}, val={r.val_nll:.2f}")
+```
+
+---
+
+### summarize_complexity_sweeps
+
+```python
+def summarize_complexity_sweeps(
+    sweeps: Mapping[str, Sequence[ComplexityResult | ComplexityHoldoutResult]]
+) -> AggregatedComplexitySummary
+```
+
+Aggregates per-factor complexity sweeps into schema-level statistics. Computes mean and standard deviation across multiple runs for each K value.
+
+<ParamField path="sweeps" type="Mapping[str, Sequence[ComplexityResult | ComplexityHoldoutResult]]" required>
+  Dictionary mapping factor names to their complexity sweep results. All sweeps must test the same K values in the same order.
+</ParamField>
+
+<ResponseField name="return" type="AggregatedComplexitySummary">
+  Aggregated statistics including mean/std for each K value and the best K overall
+</ResponseField>
+
+<Info>
+  The function automatically detects whether the input contains holdout results (with val_nll) or standard results (with nll) and uses the appropriate metric.
+</Info>
+
+#### Example
+
+```python
+import numpy as np
+from gmbp.analysis import analyze_complexity, summarize_complexity_sweeps
+
+# Run complexity analysis for multiple factors
+sweeps = {}
+for factor_name in ['age', 'height', 'weight']:
+    # Simulate different data for each factor
+    X = np.random.randn(300, 3) * (1 + 0.5 * len(factor_name))
+    sweeps[factor_name] = analyze_complexity(X, k_min=1, k_max=10)
+
+# Aggregate results
+summary = summarize_complexity_sweeps(sweeps)
+
+print(f"Best K overall: {summary.best_k}")
+print(f"Primary metric: {summary.primary_metric}")
+print(f"K values tested: {summary.k_values}")
+print(f"Mean NLL at each K: {summary.primary_mean}")
+
+# Plot aggregated results with error bars
+import matplotlib.pyplot as plt
+plt.errorbar(
+    summary.k_values,
+    summary.primary_mean,
+    yerr=summary.primary_std,
+    marker='o'
+)
+plt.xlabel('K')
+plt.ylabel(f'{summary.primary_metric} (mean ± std)')
+plt.axvline(summary.best_k, color='red', linestyle='--', label=f'Best K={summary.best_k}')
+plt.legend()
+plt.show()
+```

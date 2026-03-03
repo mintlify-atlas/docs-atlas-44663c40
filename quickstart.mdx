@@ -1,80 +1,276 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Run your first GMBP inference in minutes
 ---
 
-## Get started in three steps
+# Quick start
 
-Get your documentation site running locally and make your first customization.
+This guide walks you through fitting a factor graph and running probabilistic inference with Fusion GMBP.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Make sure you've [installed Fusion GMBP](/installation) with:
+
+```bash
+uv pip install -e ".[dev]"
+```
+
+## The workflow
+
+Fusion GMBP follows a two-step workflow:
+
+1. **Fit**: Learn factor distributions (Gaussian Mixtures) from data
+2. **Run**: Perform belief propagation inference with evidence
+
+## Example: Abalone dataset
+
+We'll use the included abalone dataset to predict shell measurements.
+
+### Step 1: Fit the model
+
+<Steps>
+  <Step title="Train factors from data">
+    Fit Gaussian Mixtures to learn the joint distributions:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```bash
+    uv run gmbp fit --data abalone --components 10
+    ```
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    This command:
+    - Loads `data/abalone/abalone.csv`
+    - Uses schema from `data/abalone/abalone.json` (or falls back to `schema.json`)
+    - Fits each factor with K=10 Gaussian components
+    - Saves trained factors to `artifacts/factors/`
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    <Info>
+    The `--components` flag overrides the per-factor component counts defined in the schema.
+    </Info>
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Check the output">
+    You should see output like:
+    
+    ```
+    INFO - Loaded graph schema for abalone
+    INFO - Loading data from abalone
+    INFO - Fitting factor 'f_len_diam_whole' on scope ['LENGTH', 'DIAMETER', 'WHOLE'] with K=10
+    INFO -   -> Fitted. Avg NLL: 2.3456
+    INFO - All factors fitted and saved to artifacts/factors
+    ```
+    
+    Factors are saved as pickle files in `artifacts/factors/`.
+  </Step>
+</Steps>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+### Step 2: Run inference
 
-### Step 3: Go live
+<Steps>
+  <Step title="Set evidence and run BP">
+    Now run belief propagation with some observed evidence:
+    
+    ```bash
+    uv run gmbp run --data abalone \
+      --factors-dir artifacts/factors \
+      --evidence "SHELL=0.4" \
+      --iters 10 \
+      --max-components 20
+    ```
+    
+    This command:
+    - Loads the fitted factors from `artifacts/factors/`
+    - Sets hard evidence: SHELL = 0.4
+    - Runs 10 iterations of belief propagation
+    - Limits messages to 20 mixture components
+    - Outputs posterior beliefs for all variables
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Interpret the results">
+    You'll see a table of posterior beliefs:
+    
+    ```
+    === Posterior Beliefs ===
+    Variable        Mean            Std Dev         #Comps    
+    ------------------------------------------------------------
+    DIAMETER        0.3916          0.0734          20
+    LENGTH          0.4521          0.0812          20
+    SHELL (E)       0.4000          0.0000          20
+    WHOLE           0.8234          0.2145          20
+    ```
+    
+    - `(E)` marks evidence variables (fixed observations)
+    - `Mean` and `Std Dev` are the posterior moments
+    - `#Comps` shows the number of mixture components
+  </Step>
+</Steps>
+
+## Python API usage
+
+You can also use Fusion GMBP directly in Python:
+
+```python
+import json
+from gmbp import BPEngine, Evidence, load_factor, GraphSchema
+
+# 1. Load schema
+with open("data/abalone/schema.json", "r") as f:
+    schema = GraphSchema.from_dict(json.load(f))
+
+# 2. Load trained factors
+factors = {}
+for f_def in schema.factors:
+    factors[f_def.name] = load_factor(f_def.name, K=10)
+
+# 3. Define evidence
+evidence = {
+    "SHELL": Evidence.from_hard([0.4])
+}
+
+# 4. Initialize and run engine
+engine = BPEngine(
+    factors=factors,
+    neighbors=schema.get_neighbors(),
+    factor_scopes=schema.get_factor_scopes(),
+    evidence=evidence
+)
+engine.initialize_messages()
+stats = engine.run(max_iter=10, max_components=20)
+
+# 5. Get posterior beliefs
+beliefs = engine.compute_beliefs()
+
+# 6. Access results
+for var_name, belief in beliefs.items():
+    print(f"{var_name}: {belief.n_components} components")
+    # belief is a GMMContainer with weights, means, covs
+```
+
+<Info>
+See `src/gmbp/__init__.py` for all available exports in the public API.
+</Info>
+
+## Advanced options
+
+### Multiple evidence variables
+
+Provide multiple observations:
+
+```bash
+uv run gmbp run --data abalone \
+  --factors-dir artifacts/factors \
+  --evidence "SHELL=0.4" \
+  --evidence "RINGS=9"
+```
+
+### Loopy BP stabilization
+
+For loopy graphs, enable damping and convergence detection:
+
+```bash
+uv run gmbp run --data abalone \
+  --factors-dir artifacts/factors \
+  --evidence "SHELL=0.4" \
+  --damping 0.3 \
+  --convergence-tol 1e-4 \
+  --convergence-patience 2
+```
+
+- `--damping`: Smooth message updates (0.3 = 30% new, 70% old)
+- `--convergence-tol`: Stop early when max message delta < threshold
+- `--convergence-patience`: Require N consecutive converged iterations
+
+### Divergence recovery
+
+Automatically retry with increased damping if BP diverges:
+
+```bash
+uv run gmbp run --data abalone \
+  --factors-dir artifacts/factors \
+  --evidence "SHELL=0.4" \
+  --retry-on-divergence \
+  --max-divergence-retries 2 \
+  --retry-damping-step 0.2
+```
+
+### Adaptive mixture reduction
+
+Reduce computational cost by pruning low-weight components:
+
+```bash
+uv run gmbp run --data abalone \
+  --factors-dir artifacts/factors \
+  --evidence "SHELL=0.4" \
+  --adaptive-reduction \
+  --min-components 3
+```
+
+<Tip>
+Use `--trace-bp` to see detailed per-message updates during inference for debugging.
+</Tip>
+
+## Model complexity analysis
+
+Analyze how model complexity (number of components K) affects fit quality:
+
+```bash
+uv run gmbp analyze --schema abalone \
+  --factor f_len_diam_whole \
+  --max-k 20 \
+  --holdout-fraction 0.25 \
+  --results-json artifacts/analysis/results.json
+```
+
+This sweeps K from 1 to 20 and reports train/validation negative log-likelihood.
+
+<Warning>
+Always use holdout validation (`--holdout-fraction > 0`) to avoid overfitting when selecting K.
+</Warning>
+
+## Common workflows
+
+### Fit with custom component counts
+
+```bash
+# Override schema defaults
+uv run gmbp fit --data abalone --components 15 --out-dir artifacts/factors_K15
+```
+
+### Run with custom factors directory
+
+```bash
+uv run gmbp run --data abalone \
+  --factors-dir artifacts/factors_K15 \
+  --evidence "SHELL=0.5"
+```
+
+### Schema-wide complexity analysis
+
+Analyze all factors at once:
+
+```bash
+uv run gmbp analyze-schema --schema abalone \
+  --holdout-fraction 0.25 \
+  --max-k 20 \
+  --out-dir artifacts/schema_analysis/abalone
+```
+
+This produces per-factor JSON results and an aggregated summary.
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="CLI reference" icon="terminal">
+    Learn about all CLI commands and options
+  </Card>
+  
+  <Card title="Python API" icon="code">
+    Explore the programmatic interface
+  </Card>
+  
+  <Card title="Custom datasets" icon="database">
+    Add your own datasets and schemas
+  </Card>
+  
+  <Card title="Web visualizer" icon="chart-line">
+    Use the interactive visualizer for step-by-step exploration
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

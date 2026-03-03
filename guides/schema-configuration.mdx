@@ -1,0 +1,409 @@
+---
+title: Schema configuration
+description: Design and configure factor graph schemas for Gaussian Mixture Belief Propagation
+---
+
+The schema file defines the structure of your probabilistic graphical model, including variables, factors, and their relationships. This guide covers schema design patterns and configuration options.
+
+## Schema anatomy
+
+A schema consists of three main sections:
+
+```json
+{
+  "variables": [...],
+  "column_map": {...},
+  "factors": [...]
+}
+```
+
+### Variables section
+
+Defines the canonical names for all random variables in your model:
+
+```json
+"variables": [
+  "LENGTH",
+  "DIAMETER",
+  "HEIGHT",
+  "WHOLE",
+  "SHUCKED",
+  "VISCERA",
+  "SHELL",
+  "RINGS"
+]
+```
+
+These names are used consistently throughout:
+- Factor scope definitions
+- Evidence specifications
+- Belief queries
+- API calls
+
+### Column map section
+
+Maps variable names to actual CSV column headers:
+
+```json
+"column_map": {
+  "LENGTH":   "Length",
+  "DIAMETER": "Diameter",
+  "HEIGHT":   "Height",
+  "WHOLE":    "Whole weight",
+  "SHUCKED":  "Shucked weight",
+  "VISCERA":  "Viscera weight",
+  "SHELL":    "Shell weight",
+  "RINGS":    "Rings"
+}
+```
+
+<Info>
+The column map allows you to use clean, uppercase variable names internally while supporting arbitrary CSV column naming conventions.
+</Info>
+
+### Factors section
+
+Defines the joint probability distributions in your factor graph:
+
+```json
+"factors": [
+  {
+    "name": "f_len_diam_whole",
+    "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+    "n_components": 10
+  },
+  {
+    "name": "f_diam_shell",
+    "scope": ["DIAMETER", "SHELL"],
+    "n_components": 10
+  }
+]
+```
+
+## Factor configuration
+
+### Factor fields
+
+<Accordion title="name (required)">
+**Type:** `string`
+
+Unique identifier for the factor. Used for:
+- Saving/loading trained GMM files
+- Logging and debugging
+- Factor-specific analysis
+
+**Naming convention:** Use descriptive names like `f_<vars>` (e.g., `f_len_diam` for a LENGTH-DIAMETER factor).
+</Accordion>
+
+<Accordion title="scope (required)">
+**Type:** `array<string>`
+
+List of variables participating in this joint distribution. All variable names must appear in the top-level `variables` list.
+
+**Examples:**
+- Pairwise: `["LENGTH", "DIAMETER"]`
+- 3-way: `["LENGTH", "DIAMETER", "WHOLE"]`
+- N-way: `["VAR1", "VAR2", "VAR3", "VAR4"]`
+</Accordion>
+
+<Accordion title="n_components (optional)">
+**Type:** `integer`
+
+**Default:** 10
+
+Number of Gaussian components in the mixture model for this factor. Can be overridden at runtime with the `--components` flag.
+
+**Usage:**
+```json
+{
+  "name": "f_complex_relation",
+  "scope": ["X", "Y", "Z"],
+  "n_components": 15
+}
+```
+</Accordion>
+
+## Design patterns
+
+### Pairwise factor graph
+
+The simplest and most common pattern uses only 2-variable factors:
+
+```json
+{
+  "variables": ["LENGTH", "DIAMETER", "WHOLE", "SHELL", "RINGS"],
+  "column_map": {
+    "LENGTH": "Length",
+    "DIAMETER": "Diameter",
+    "WHOLE": "Whole weight",
+    "SHELL": "Shell weight",
+    "RINGS": "Rings"
+  },
+  "factors": [
+    {
+      "name": "f_len_diam",
+      "scope": ["LENGTH", "DIAMETER"],
+      "n_components": 10
+    },
+    {
+      "name": "f_diam_shell",
+      "scope": ["DIAMETER", "SHELL"],
+      "n_components": 10
+    },
+    {
+      "name": "f_shell_rings",
+      "scope": ["SHELL", "RINGS"],
+      "n_components": 10
+    }
+  ]
+}
+```
+
+<Tip>
+**Pairwise advantages:**
+- Easier to fit (fewer parameters)
+- Faster inference
+- Better for visualization
+- More robust convergence
+</Tip>
+
+### Star topology (node-centric)
+
+Connect multiple variables through a central hub:
+
+```json
+{
+  "variables": ["LENGTH", "DIAMETER", "WHOLE", "SHUCKED", "VISCERA", "SHELL"],
+  "column_map": { ... },
+  "factors": [
+    {
+      "name": "f_len_diam_whole",
+      "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+      "n_components": 10
+    },
+    {
+      "name": "f_whole_shucked",
+      "scope": ["WHOLE", "SHUCKED"],
+      "n_components": 10
+    },
+    {
+      "name": "f_whole_viscera",
+      "scope": ["WHOLE", "VISCERA"],
+      "n_components": 10
+    },
+    {
+      "name": "f_whole_shell",
+      "scope": ["WHOLE", "SHELL"],
+      "n_components": 10
+    }
+  ]
+}
+```
+
+Here `WHOLE` acts as a hub connecting other weight measurements.
+
+### Higher-order factors
+
+Capture complex multi-variable relationships:
+
+```json
+{
+  "factors": [
+    {
+      "name": "f_spatial_3d",
+      "scope": ["LENGTH", "DIAMETER", "HEIGHT"],
+      "n_components": 12
+    }
+  ]
+}
+```
+
+<Warning>
+**Complexity warning:** Higher-dimensional factors require:
+- More training data
+- More mixture components
+- More computation during inference
+- Careful numerical handling
+</Warning>
+
+## Schema validation
+
+### Basic validation
+
+All schemas are automatically validated on load:
+
+```bash
+gmbp fit --data my_dataset
+```
+
+Validation checks:
+- All factor scope variables exist in `variables` list
+- No duplicate variable names
+- No duplicate factor names
+- Valid JSON structure
+
+### Strict pairwise mode
+
+Enforce that all factors are pairwise (exactly 2 variables):
+
+```bash
+gmbp fit --data my_dataset --strict-pairwise
+```
+
+This fails validation if any factor has `scope` length ≠ 2.
+
+<Info>
+Strict pairwise mode is recommended when following the reference implementation constraints described in the README.
+</Info>
+
+### Non-pairwise warnings
+
+Without `--strict-pairwise`, the CLI issues warnings for non-pairwise factors:
+
+```
+WARNING - Schema includes non-pairwise factors (f_len_diam_whole).
+Use --strict-pairwise to enforce pairwise-only constraints.
+```
+
+## Component count strategies
+
+### Per-factor specification
+
+Set different component counts for each factor:
+
+```json
+{
+  "factors": [
+    {
+      "name": "f_simple",
+      "scope": ["X", "Y"],
+      "n_components": 5
+    },
+    {
+      "name": "f_complex",
+      "scope": ["Z", "W"],
+      "n_components": 20
+    }
+  ]
+}
+```
+
+### Global override
+
+Override all component counts at runtime:
+
+```bash
+# Use K=15 for all factors regardless of schema
+gmbp fit --data abalone --components 15
+```
+
+<Note>
+CLI precedence: `--components` flag > schema `n_components` > default (10)
+</Note>
+
+### Finding optimal K
+
+Use complexity analysis to determine the best component count:
+
+```bash
+# Sweep K from 1 to 20 with validation holdout
+gmbp analyze --schema abalone --factor f_len_diam_whole \
+             --holdout-fraction 0.25 --max-k 20 \
+             --results-json artifacts/analysis.json
+```
+
+For schema-wide analysis:
+
+```bash
+gmbp analyze-schema --schema abalone \
+                     --holdout-fraction 0.25 \
+                     --max-k 20 \
+                     --out-dir artifacts/schema_analysis
+```
+
+## Real-world examples
+
+### Abalone dataset (pairwise)
+
+From `data/abalone/schema.json` - a loopy pairwise factor graph:
+
+```json
+{
+  "variables": [
+    "LENGTH", "DIAMETER", "HEIGHT", "WHOLE",
+    "SHUCKED", "VISCERA", "SHELL", "RINGS"
+  ],
+  "column_map": {
+    "LENGTH":   "Length",
+    "DIAMETER": "Diameter",
+    "HEIGHT":   "Height",
+    "WHOLE":    "Whole weight",
+    "SHUCKED":  "Shucked weight",
+    "VISCERA":  "Viscera weight",
+    "SHELL":    "Shell weight",
+    "RINGS":    "Rings"
+  },
+  "factors": [
+    {"name": "f_len_diam_whole", "scope": ["LENGTH", "DIAMETER", "WHOLE"], "n_components": 10},
+    {"name": "f_diam_shell", "scope": ["DIAMETER", "SHELL"], "n_components": 10},
+    {"name": "f_whole_shell", "scope": ["WHOLE", "SHELL"], "n_components": 10},
+    {"name": "f_whole_shucked", "scope": ["WHOLE", "SHUCKED"], "n_components": 10},
+    {"name": "f_whole_viscera", "scope": ["WHOLE", "VISCERA"], "n_components": 10},
+    {"name": "f_shell_height", "scope": ["SHELL", "HEIGHT"], "n_components": 10},
+    {"name": "f_shell_rings", "scope": ["SHELL", "RINGS"], "n_components": 10},
+    {"name": "f_rings_shucked", "scope": ["RINGS", "SHUCKED"], "n_components": 10}
+  ]
+}
+```
+
+Note: This schema includes one 3-way factor (`f_len_diam_whole`).
+
+## Schema resolution
+
+The CLI uses intelligent schema resolution:
+
+### Resolution order
+
+1. If `--schema` provided: use that file/name
+2. If `--data` provided: try `<dataset_name>.json`
+3. Fallback: try `schema.json` in dataset directory
+
+### Examples
+
+```bash
+# Tries data/abalone/abalone.json, falls back to data/abalone/schema.json
+gmbp fit --data abalone
+
+# Uses data/abalone/schema_nd.json
+gmbp fit --data abalone --schema schema_nd
+
+# Explicit cross-platform path
+gmbp fit --schema data/abalone/custom.json --data abalone
+```
+
+## Troubleshooting
+
+### Missing variable in scope
+
+**Error:** `Variable 'FOO' in factor scope not found in schema variables list`
+
+**Fix:** Add `FOO` to the top-level `variables` array.
+
+### Column mapping mismatch
+
+**Error:** `Failed to extract variables ['FOO']: column not found`
+
+**Fix:** Ensure `column_map` entries match actual CSV column headers exactly (case-sensitive).
+
+### Validation failure
+
+**Error:** `Schema validation failed: non-pairwise factor detected`
+
+**Fix:** Either:
+- Remove `--strict-pairwise` flag
+- Redesign factors to be pairwise only
+
+## Related resources
+
+- [Working with datasets](/guides/working-with-datasets) - Dataset setup and organization
+- [Convergence tuning](/guides/convergence-tuning) - Optimize inference for your graph structure

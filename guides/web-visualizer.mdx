@@ -1,0 +1,386 @@
+---
+title: Web visualizer
+description: Use the interactive web application to visualize and step through belief propagation
+---
+
+The Fusion GMBP web visualizer provides an interactive interface for exploring belief propagation step-by-step, visualizing graph structure, and observing how evidence propagates through the factor graph.
+
+## Installation
+
+The web app requires additional dependencies:
+
+```bash
+uv pip install -e ".[webapp]"
+```
+
+This installs:
+- FastAPI (web framework)
+- Uvicorn (ASGI server)
+
+## Starting the server
+
+Launch the visualizer server:
+
+```bash
+uv run uvicorn webapp.server:app --host 0.0.0.0 --port 8050
+```
+
+The application will be available at:
+
+```
+http://localhost:8050
+```
+
+<Info>
+The server binds to `0.0.0.0` by default, making it accessible from other machines on your network. Use `--host 127.0.0.1` to restrict to localhost only.
+</Info>
+
+## Features
+
+### Load schemas and datasets
+
+The web interface lets you:
+
+- **Select dataset**: Choose from available datasets in `data/`
+- **Pick schema file**: Select from schema JSON files in the dataset folder
+- **Set component count**: Configure mixture components (K)
+- **Auto-load factors**: Automatically detects pre-trained factors in `artifacts/`
+
+<Steps>
+  <Step title="Open the web interface">
+    Navigate to `http://localhost:8050` in your browser
+  </Step>
+
+  <Step title="Select dataset and schema">
+    Use the dropdown to choose a dataset (e.g., "abalone") and schema file (e.g., "schema.json")
+  </Step>
+
+  <Step title="Configure components">
+    Set the number of mixture components (default: 10)
+  </Step>
+
+  <Step title="Load the model">
+    Click "Load" to initialize the factor graph. The server will:
+    - Try to load pre-trained factors from `artifacts/`
+    - Fit GMMs on-the-fly if factors aren't found
+  </Step>
+</Steps>
+
+### Factor loading behavior
+
+The server uses smart factor resolution:
+
+1. **Explicit path**: If you specify `factorsDir`, loads from there
+2. **Auto-detection**: Searches these locations in order:
+   - `artifacts/factors_{schemaBase}_k{K}/`
+   - `artifacts/factors_{schemaBase}/`
+   - `artifacts/factors_{dataset}_{schemaBase}/`
+   - `artifacts/factors_{dataset}/`
+3. **On-the-fly fitting**: Fits GMMs dynamically if no factors found
+
+<Note>
+The interface displays the factor source ("loaded from artifacts/..." or "fitted on-the-fly") after loading.
+</Note>
+
+### Set evidence interactively
+
+Observe and manipulate evidence variables:
+
+- **Click variable nodes** to set evidence values
+- **Adjust values** using sliders or direct input
+- **Clear evidence** by deselecting the variable
+- **View current evidence** in the evidence panel
+
+<Tip>
+Evidence nodes are highlighted in the graph visualization. Try setting multiple observations and watch how beliefs propagate.
+</Tip>
+
+### Step through belief propagation
+
+The visualizer provides granular control over BP execution:
+
+#### Single message step
+
+Advance one message update at a time:
+
+1. Click "Step" to compute the next Factor→Variable or Variable→Factor message
+2. Observe:
+   - Which message was updated
+   - Message delta (change magnitude)
+   - Updated beliefs for affected variables
+
+#### Full iteration step
+
+Execute a complete BP iteration (all messages):
+
+1. Click "Step Iteration"
+2. View:
+   - All message updates in sequence
+   - Iteration number
+   - Max delta across all messages
+   - Updated posterior beliefs
+
+#### Reset
+
+Return to initial state:
+
+- Click "Reset" to reinitialize all messages
+- Evidence settings are preserved
+- Useful for comparing different starting conditions
+
+### Visualize graph structure
+
+The graph visualization displays:
+
+- **Variable nodes** (circles): Random variables in your model
+- **Factor nodes** (squares): Joint probability distributions
+- **Edges**: Connections between variables and factors
+- **Evidence highlighting**: Observed variables shown in distinct color
+
+<Info>
+The graph layout is computed automatically. The visualization updates dynamically as you set evidence and step through BP.
+</Info>
+
+### Observe belief updates
+
+The belief panel shows:
+
+- **Current posteriors**: Mean and standard deviation for each variable
+- **Component counts**: Number of mixture components in each belief
+- **Evidence indicators**: Which variables have observations
+- **Convergence info**: Iteration count, max delta
+
+#### Belief snapshots
+
+Beliefs are displayed at key points:
+
+- **Initial**: Prior beliefs before any BP iterations
+- **After each step**: Updated beliefs for affected variables
+- **After each iteration**: Complete posterior snapshot
+
+<Accordion title="Reading belief displays">
+Each variable shows:
+
+```
+VARIABLE_NAME
+μ = 0.4123  σ = 0.0856  K = 12
+```
+
+- **μ**: Posterior mean (weighted mixture mean)
+- **σ**: Posterior standard deviation
+- **K**: Number of mixture components
+- **(E)**: Evidence marker if observed
+</Accordion>
+
+### Marginal density overlays
+
+The interface can display empirical marginal distributions:
+
+- **Training data marginals**: Histograms from the dataset
+- **Posterior overlays**: Compare learned posteriors to data
+
+<Tip>
+Use marginal overlays to verify that posteriors match the data distribution when no evidence is set.
+</Tip>
+
+## API endpoints
+
+The web app exposes a REST API for programmatic access:
+
+### GET /api/schemas
+
+List available datasets and schema files:
+
+```bash
+curl http://localhost:8050/api/schemas
+```
+
+Response:
+```json
+[
+  {
+    "name": "abalone",
+    "files": ["schema.json", "schema_nd.json"]
+  },
+  {
+    "name": "circular_factory",
+    "files": ["schema.json"]
+  }
+]
+```
+
+### POST /api/load
+
+Load schema and initialize BP engine:
+
+```bash
+curl -X POST http://localhost:8050/api/load \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schema": "abalone",
+    "schemaFile": "schema.json",
+    "nComponents": 10
+  }'
+```
+
+Response includes graph structure, initial beliefs, and marginals.
+
+### POST /api/evidence
+
+Set or clear evidence:
+
+```bash
+# Set evidence
+curl -X POST http://localhost:8050/api/evidence \
+  -H "Content-Type: application/json" \
+  -d '{"variable": "SHELL", "value": 0.4}'
+
+# Clear evidence
+curl -X POST http://localhost:8050/api/evidence \
+  -H "Content-Type: application/json" \
+  -d '{"variable": "SHELL", "clear": true}'
+```
+
+### POST /api/step
+
+Execute single message update:
+
+```bash
+curl -X POST http://localhost:8050/api/step
+```
+
+Returns message details, delta, and updated beliefs.
+
+### POST /api/step-iteration
+
+Execute full BP iteration:
+
+```bash
+curl -X POST http://localhost:8050/api/step-iteration
+```
+
+Returns all message updates and complete belief snapshot.
+
+### POST /api/reset
+
+Reset to initial state:
+
+```bash
+curl -X POST http://localhost:8050/api/reset
+```
+
+### GET /api/state
+
+Get current engine state:
+
+```bash
+curl http://localhost:8050/api/state
+```
+
+Response:
+```json
+{
+  "beliefs": { ... },
+  "iteration": 3,
+  "maxDelta": 0.00234,
+  "step": 12,
+  "finished": false
+}
+```
+
+### GET /api/beliefs
+
+Get current posterior beliefs:
+
+```bash
+curl http://localhost:8050/api/beliefs
+```
+
+## Configuration
+
+The web app uses these settings (in `webapp/server.py`):
+
+- **Project root**: Auto-detected from server location
+- **Data directory**: `{project_root}/data`
+- **Factors auto-detection**: `{project_root}/artifacts/factors_*`
+- **Default BP params**:
+  - `max_iter`: 40
+  - `max_components`: 20
+  - `damping`: 0.3
+
+<Info>
+You can modify these defaults by editing `webapp/server.py` at the `StepBPEngine` initialization (around line 145).
+</Info>
+
+## Usage tips
+
+<Tip>
+**Pre-train factors**: For faster loading, run `gmbp fit` before starting the visualizer:
+
+```bash
+gmbp fit --data abalone --components 10 --out-dir artifacts/factors
+```
+</Tip>
+
+<Tip>
+**Compare schemas**: Load different schema files for the same dataset to see how graph structure affects inference:
+
+1. Load `schema.json` (pairwise)
+2. Step through several iterations
+3. Reset and load `schema_nd.json` (N-D factors)
+4. Compare convergence behavior
+</Tip>
+
+<Tip>
+**Evidence experiments**: Try different evidence combinations:
+
+- Single observation vs. multiple observations
+- Evidence on highly-connected vs. leaf variables
+- Extreme vs. typical values
+</Tip>
+
+<Warning>
+**Browser performance**: Very large graphs (>20 variables, >30 factors) may render slowly. Consider using smaller schemas for interactive exploration.
+</Warning>
+
+## Troubleshooting
+
+### Server won't start
+
+**Error:** `ModuleNotFoundError: No module named 'fastapi'`
+
+**Fix:** Install webapp dependencies:
+```bash
+uv pip install -e ".[webapp]"
+```
+
+### No schemas found
+
+**Symptom:** Empty dataset dropdown
+
+**Fix:** Ensure you have datasets in `data/` with schema JSON files:
+```bash
+ls data/*/schema*.json
+```
+
+### Factors not loading
+
+**Symptom:** "Fitting on-the-fly" for every load
+
+**Fix:** Pre-train factors with matching component count:
+```bash
+gmbp fit --data abalone --components 10 --out-dir artifacts/factors
+```
+
+The visualizer looks for exact K matches in the auto-detection paths.
+
+### Slow step execution
+
+**Symptom:** Long delay when clicking "Step"
+
+**Fix:** Reduce `max_components` in server configuration or use simpler schemas.
+
+## Related resources
+
+- [Convergence tuning](/guides/convergence-tuning) - Understand BP parameters used in the visualizer
+- [Schema configuration](/guides/schema-configuration) - Design schemas for visualization

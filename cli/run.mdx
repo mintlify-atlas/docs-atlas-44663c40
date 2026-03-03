@@ -1,0 +1,630 @@
+---
+title: gmbp run
+description: Run belief propagation inference with evidence to compute posterior beliefs
+---
+
+The `gmbp run` command performs belief propagation inference on a factor graph using pre-trained GMM factors. It propagates evidence through the graph to compute posterior beliefs for all variables.
+
+## Basic usage
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.5"
+```
+
+This command:
+1. Loads the schema and pre-trained factors
+2. Parses evidence constraints
+3. Runs belief propagation for 10 iterations (default)
+4. Outputs posterior beliefs (mean, std, component count) for all variables
+
+## Command options
+
+### Schema and factors
+
+<ParamField path="--schema" type="string">
+  Schema name or path to schema JSON file.
+  
+  Resolution matches `gmbp fit` behavior:
+  - If omitted with `--data abalone`, tries `data/abalone/abalone.json` then `schema.json`
+  - Schema name resolves to `data/<dataname>/<schema>.json`
+  - Or provide explicit path
+  
+  ```bash
+  gmbp run --data abalone --evidence "SHELL=0.5"
+  gmbp run --schema schema_nd --data abalone --evidence "SHELL=0.5"
+  ```
+</ParamField>
+
+<ParamField path="--data" type="string">
+  Dataset name or path used to resolve schema location.
+  
+  Optional for `run` if you provide explicit `--schema` path.
+  
+  ```bash
+  gmbp run --data abalone --evidence "SHELL=0.5"
+  ```
+</ParamField>
+
+<ParamField path="--factors-dir" type="string" default="artifacts/factors">
+  Directory containing fitted factors.
+  
+  Must contain factor pickle files matching the schema (e.g., `f_len_diam_whole_K10.pkl`).
+  
+  ```bash
+  gmbp run --data abalone --factors-dir artifacts/factors_K8 --evidence "SHELL=0.5"
+  ```
+</ParamField>
+
+<ParamField path="--components" type="integer">
+  Override number of components when loading factors. Short form: `-K`
+  
+  Must match the K used during fitting.
+  
+  ```bash
+  gmbp run --data abalone --factors-dir artifacts/factors_K8 --components 8 --evidence "SHELL=0.5"
+  ```
+</ParamField>
+
+### Evidence specification
+
+<ParamField path="--evidence" type="string" required>
+  Evidence in the form `VAR=VALUE`. Can be specified multiple times. Short form: `-e`
+  
+  Each evidence entry creates a hard constraint (Dirac delta / zero covariance) on that variable.
+  
+  ```bash
+  # Single evidence
+  gmbp run --schema abalone --evidence "SHELL=0.4"
+  
+  # Multiple evidence variables
+  gmbp run --schema abalone --evidence "SHELL=0.4" --evidence "RINGS=9"
+  
+  # Short form
+  gmbp run --schema abalone -e "SHELL=0.4" -e "RINGS=9"
+  ```
+  
+  <Warning>
+    Variable names must match schema definitions exactly. Unknown variables trigger a warning but don't stop inference.
+  </Warning>
+</ParamField>
+
+### Belief propagation parameters
+
+<ParamField path="--iters" type="integer" default="10">
+  Number of BP iterations to run.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.5" --iters 20
+  ```
+</ParamField>
+
+<ParamField path="--max-components" type="integer" default="20">
+  Maximum components allowed during message passing.
+  
+  Controls mixture complexity during GMM product/conditioning operations. Messages are truncated to this limit after each operation.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.5" --max-components 30
+  ```
+</ParamField>
+
+<ParamField path="--damping" type="float" default="0.0">
+  Message damping factor in [0, 1) for loopy graphs.
+  
+  Damping stabilizes convergence in cyclic graphs:
+  - `0.0`: No damping (full message updates)
+  - `0.3-0.5`: Mild damping for marginal stability
+  - `0.7-0.9`: Heavy damping for highly unstable graphs
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" --damping 0.3
+  ```
+</ParamField>
+
+<ParamField path="--update-order" type="string" default="synchronous">
+  Message update schedule.
+  
+  Choices:
+  - `synchronous`: Jacobi-style parallel updates (all messages computed from previous iteration)
+  - `sequential`: Gauss-Seidel-style serial updates (messages use latest available values)
+  
+  Sequential order can improve convergence in loopy graphs.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" --update-order sequential
+  ```
+</ParamField>
+
+### Convergence control
+
+<ParamField path="--convergence-tol" type="float" default="None">
+  Optional early-stop threshold on maximum message delta.
+  
+  If max delta falls below this tolerance for `--convergence-patience` consecutive iterations, BP stops early.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" --convergence-tol 1e-4
+  ```
+</ParamField>
+
+<ParamField path="--convergence-rtol" type="float" default="0.0">
+  Optional relative tolerance term for convergence.
+  
+  Effective tolerance = `tol + rtol * running_max_delta`. Useful for adaptive convergence criteria.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --convergence-tol 1e-4 --convergence-rtol 0.05
+  ```
+</ParamField>
+
+<ParamField path="--convergence-patience" type="integer" default="1">
+  Consecutive iterations required below tolerance before early-stop.
+  
+  Prevents premature stopping from temporary delta drops.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --convergence-tol 1e-4 --convergence-patience 2
+  ```
+</ParamField>
+
+<ParamField path="--convergence-min-iter" type="integer" default="0">
+  Minimum iterations to run before convergence early-stop can trigger.
+  
+  Ensures the graph reaches a reasonable state before checking convergence.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --convergence-tol 1e-4 --convergence-patience 2 --convergence-min-iter 4
+  ```
+</ParamField>
+
+### Adaptive behavior
+
+<ParamField path="--adaptive-reduction" type="boolean">
+  Enable adaptive mixture reduction using ESS/entropy-derived effective component caps.
+  
+  Automatically adjusts mixture complexity based on effective sample size, potentially improving efficiency.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --adaptive-reduction --min-components 1
+  ```
+</ParamField>
+
+<ParamField path="--min-components" type="integer" default="1">
+  Minimum component count preserved when adaptive reduction is enabled.
+  
+  Prevents over-simplification of beliefs.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --adaptive-reduction --min-components 3
+  ```
+</ParamField>
+
+<ParamField path="--auto-damping" type="boolean">
+  Automatically increase damping when delta dynamics indicate unstable loopy updates.
+  
+  BP monitors convergence and escalates damping adaptively when oscillations are detected.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --auto-damping --damping-step 0.1 --max-damping 0.9
+  ```
+</ParamField>
+
+<ParamField path="--damping-step" type="float" default="0.1">
+  Increment used by `--auto-damping` when instability is detected.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --auto-damping --damping-step 0.15
+  ```
+</ParamField>
+
+<ParamField path="--max-damping" type="float" default="0.9">
+  Upper bound for damping when `--auto-damping` is enabled.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --auto-damping --max-damping 0.95
+  ```
+</ParamField>
+
+### Divergence recovery
+
+<ParamField path="--retry-on-divergence" type="boolean">
+  If divergence heuristic triggers, restart BP from initial messages with increased damping.
+  
+  Provides automatic recovery from unstable inference attempts.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --retry-on-divergence --max-divergence-retries 2 --retry-damping-step 0.2
+  ```
+</ParamField>
+
+<ParamField path="--max-divergence-retries" type="integer" default="2">
+  Maximum restart attempts when `--retry-on-divergence` is enabled.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --retry-on-divergence --max-divergence-retries 3
+  ```
+</ParamField>
+
+<ParamField path="--retry-damping-step" type="float" default="0.2">
+  Damping increment used between divergence retries.
+  
+  Each retry increases damping by this amount until `--max-damping` is reached.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --retry-on-divergence --retry-damping-step 0.25
+  ```
+</ParamField>
+
+<ParamField path="--retry-with-sequential" type="boolean">
+  When divergence retries are enabled, switch retry attempts from the selected `--update-order` to sequential scheduling.
+  
+  Sequential updates are often more stable for loopy graphs.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --retry-on-divergence --retry-with-sequential
+  ```
+</ParamField>
+
+<ParamField path="--divergence-patience" type="integer" default="None">
+  Optional early-stop trigger for divergence.
+  
+  Stops when max-delta strictly grows for N consecutive iterations (N ≥ 3). Reduces wasted computation on clearly unstable runs.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --retry-on-divergence --divergence-patience 4
+  ```
+</ParamField>
+
+### Initialization
+
+<ParamField path="--seed-messages-with-evidence" type="boolean">
+  Initialize variable→factor messages for observed variables from evidence mixtures.
+  
+  Provides a warm start that can improve convergence speed.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" --seed-messages-with-evidence
+  ```
+</ParamField>
+
+### Output and diagnostics
+
+<ParamField path="--stats-out" type="string">
+  Optional JSON file path to store BP diagnostics and posterior summary.
+  
+  Includes:
+  - Convergence statistics (iterations, max_delta, converged)
+  - Stability metrics (contraction_ratio, spectral_radius_proxy)
+  - Retry history if divergence recovery was used
+  - Per-variable posterior moments (mean, std, component count)
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" \
+           --stats-out artifacts/run_stats/latest.json
+  ```
+</ParamField>
+
+<ParamField path="--output-dir" type="string">
+  Directory to save detailed results (future extension placeholder).
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" --output-dir artifacts/run_results
+  ```
+</ParamField>
+
+<ParamField path="--trace-bp" type="boolean">
+  Enable detailed per-message BP iteration trace.
+  
+  See [Trace mode documentation](/cli/trace-mode) for details.
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.5" --trace-bp --iters 3
+  ```
+</ParamField>
+
+<ParamField path="--strict-pairwise" type="boolean">
+  Enforce pairwise-only factors during schema validation.
+  
+  ```bash
+  gmbp run --schema abalone --strict-pairwise --evidence "SHELL=0.4"
+  ```
+</ParamField>
+
+<ParamField path="--verbose" type="boolean">
+  Enable verbose logging. Short form: `-v`
+  
+  ```bash
+  gmbp run --schema abalone --evidence "SHELL=0.4" --verbose
+  ```
+</ParamField>
+
+## Examples
+
+### Basic inference with single evidence
+
+```bash
+gmbp run --data abalone --evidence "SHELL=0.5"
+```
+
+Output:
+```
+2026-03-03 10:45:20 - INFO - Loaded graph schema for <auto>
+2026-03-03 10:45:20 - INFO - Loading factors from artifacts/factors
+2026-03-03 10:45:20 - INFO - Injecting Hard Evidence: SHELL = 0.5
+2026-03-03 10:45:20 - INFO - Running BP (iters=10, max_components=20, damping=0.000, ...)
+2026-03-03 10:45:21 - INFO - BP diagnostics: iterations=10 max_delta=1.234e-02 converged=False ...
+
+=== Posterior Beliefs ===
+Variable        Mean            Std Dev         #Comps    
+------------------------------------------------------------
+DIAMETER        0.4087          0.0821          18        
+LENGTH          0.5234          0.1042          20        
+RINGS           9.8765          2.3456          15        
+SHELL (E)       0.5000          0.0000          20        
+WHOLE           0.8392          0.4982          19        
+```
+
+Note: `(E)` marks evidence variables.
+
+### Multiple evidence constraints
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" --evidence "RINGS=9"
+```
+
+### Custom factor directory and components
+
+```bash
+gmbp run --data abalone --schema schema_nd \
+         --factors-dir artifacts/factors_K8 --components 8 \
+         --evidence "SHELL=0.5"
+```
+
+### Loopy BP with damping and convergence
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+         --damping 0.3 --convergence-tol 1e-4 \
+         --convergence-rtol 0.05 --convergence-patience 2 \
+         --convergence-min-iter 4
+```
+
+### Adaptive damping for unstable graphs
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+         --auto-damping --damping-step 0.1 --max-damping 0.9
+```
+
+### Sequential update order
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" --update-order sequential
+```
+
+### Divergence recovery with retries
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+         --retry-on-divergence --max-divergence-retries 2 \
+         --retry-damping-step 0.2 --divergence-patience 4
+```
+
+### Sequential fallback on divergence
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+         --retry-on-divergence --retry-with-sequential
+```
+
+### Adaptive mixture reduction
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+         --adaptive-reduction --min-components 1
+```
+
+### Export diagnostics to JSON
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+         --stats-out artifacts/run_stats/latest.json
+```
+
+JSON output structure:
+```json
+{
+  "stats": {
+    "iterations": 10,
+    "max_delta": 0.01234,
+    "converged": false,
+    "final_damping": 0.0,
+    "stability_label": "marginal",
+    "spectral_radius_proxy": 0.987,
+    "retry_attempts": [...]
+  },
+  "beliefs": {
+    "DIAMETER": {"mean": 0.4087, "std": 0.0821, "n_components": 18, "is_evidence": false},
+    "SHELL": {"mean": 0.5, "std": 0.0, "n_components": 20, "is_evidence": true}
+  },
+  "evidence": ["SHELL"]
+}
+```
+
+### Cross-platform syntax
+
+<CodeGroup>
+```bash Linux / macOS
+gmbp run --data abalone --schema schema_nd \
+         --factors-dir artifacts/factors_K8 --components 8 \
+         --evidence "SHELL=0.5"
+```
+
+```powershell Windows
+gmbp run --data abalone --schema schema_nd `
+         --factors-dir artifacts\factors_K8 --components 8 `
+         --evidence "SHELL=0.5"
+```
+</CodeGroup>
+
+## Understanding output
+
+### Posterior beliefs table
+
+The output table shows:
+
+<ResponseField name="Variable" type="string">
+  Variable name. Evidence variables are marked with `(E)`.
+</ResponseField>
+
+<ResponseField name="Mean" type="float">
+  Expected value of the posterior belief (first moment).
+</ResponseField>
+
+<ResponseField name="Std Dev" type="float">
+  Standard deviation (square root of variance, second central moment).
+  
+  Evidence variables have `std=0.0` due to hard constraints.
+</ResponseField>
+
+<ResponseField name="#Comps" type="integer">
+  Number of components in the posterior mixture.
+  
+  Indicates complexity of the belief distribution.
+</ResponseField>
+
+### BP diagnostics
+
+Log output includes convergence diagnostics:
+
+```
+BP diagnostics: iterations=10 max_delta=1.234e-02 converged=False 
+                final_damping=0.300 oscillations=2 contraction_ratio=0.987 
+                spectral_radius_proxy=0.945 stability=marginal diverging=False
+```
+
+<ResponseField name="iterations" type="integer">
+  Number of BP iterations completed.
+</ResponseField>
+
+<ResponseField name="max_delta" type="float">
+  Maximum message change in the final iteration.
+</ResponseField>
+
+<ResponseField name="converged" type="boolean">
+  Whether convergence criteria (if specified) were met.
+</ResponseField>
+
+<ResponseField name="final_damping" type="float">
+  Damping value used in the final iteration (may differ from initial if auto-damping is enabled).
+</ResponseField>
+
+<ResponseField name="stability" type="string">
+  Stability classification:
+  - `contractive`: Stable, converging
+  - `marginal`: Near boundary of stability
+  - `unstable`: Diverging
+  - `unknown`: Insufficient data
+</ResponseField>
+
+<ResponseField name="diverging" type="boolean">
+  Whether the divergence heuristic was triggered.
+</ResponseField>
+
+### Warnings
+
+<Warning>
+  **Divergence warning**: If you see "Loopy-BP divergence heuristic triggered", consider:
+  - Increasing `--damping` (try 0.3-0.5)
+  - Reducing `--max-components`
+  - Enabling `--retry-on-divergence` for automatic recovery
+</Warning>
+
+<Warning>
+  **Marginal stability**: If stability is "marginal", the inference may be sensitive to small changes. Consider mild damping for robustness.
+</Warning>
+
+## Error handling
+
+### Factors not found
+
+```
+ERROR - Failed to load factors: Factor file not found: artifacts/factors/f_len_diam_whole_K10.pkl
+ERROR - Have you run 'gmbp fit --schema ...' with matching components?
+```
+
+**Solution**: Run `gmbp fit` first with matching `--components` value.
+
+### Invalid evidence format
+
+```
+ERROR - Invalid evidence format 'SHELL:0.5'. Expected VAR=FLOAT (e.g., SHELL=0.5)
+```
+
+**Solution**: Use `VAR=VALUE` format with equals sign.
+
+### Unknown evidence variable
+
+```
+WARNING - Evidence variable 'UNKNOWN_VAR' is not defined in the schema variables list.
+```
+
+**Solution**: Check variable names in your schema. Evidence continues but may not affect inference.
+
+### Invalid min-components
+
+```
+ERROR - --min-components must be >= 1
+```
+
+**Solution**: Set `--min-components` to at least 1.
+
+## Performance tips
+
+<Tip>
+  **Convergence speed**: For faster convergence on loopy graphs:
+  1. Try `--update-order sequential`
+  2. Enable `--seed-messages-with-evidence` for warm start
+  3. Use mild damping (0.2-0.4) proactively
+</Tip>
+
+<Tip>
+  **Stability**: For challenging inference problems:
+  1. Start with `--retry-on-divergence --retry-with-sequential`
+  2. Increase `--max-divergence-retries` if needed
+  3. Monitor `--stats-out` JSON for retry history and stability metrics
+</Tip>
+
+<Info>
+  **Component complexity**: Higher `--max-components` preserves more distributional detail but increases computation. Start with default (20) and adjust based on inference quality.
+</Info>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Trace mode" icon="bug" href="/cli/trace-mode">
+    Debug inference with detailed per-message tracing
+  </Card>
+  <Card title="Analyze complexity" icon="chart-line" href="/cli/analyze">
+    Evaluate model fit quality and component selection
+  </Card>
+  <Card title="Python API" icon="code" href="/api/bp-engine">
+    Use BPEngine programmatically for custom workflows
+  </Card>
+  <Card title="Loopy BP convergence" icon="circle-nodes" href="/concepts/belief-propagation">
+    Understand convergence diagnostics and stability
+  </Card>
+</CardGroup>

@@ -1,0 +1,98 @@
+---
+title: Introduction
+description: Gaussian Mixture Belief Propagation library for probabilistic inference on continuous variables with non-linear, multi-modal relationships
+---
+
+# Welcome to Fusion GMBP
+
+Fusion GMBP is a Gaussian Mixture Belief Propagation implementation for probabilistic inference on continuous variables with non-linear, multi-modal relationships.
+
+## What is GMBP?
+
+Unlike standard Gaussian Belief Propagation (GaBP), which assumes linear relationships and unimodal distributions, GMBP uses Gaussian Mixtures to preserve ambiguity throughout the inference process.
+
+For example, if X is observed, Y could be 5 OR 10 - GMBP maintains both possibilities as separate components in the mixture, enabling true multi-modal reasoning.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Multi-modal inference" icon="chart-mixed">
+    Preserve ambiguity with Gaussian Mixture representations instead of collapsing to single modes
+  </Card>
+  
+  <Card title="Loopy BP convergence" icon="arrows-spin">
+    Built-in convergence diagnostics, adaptive damping, and divergence recovery for stable loopy graphs
+  </Card>
+  
+  <Card title="Pairwise factors" icon="link">
+    Learn joint probability distributions over variable pairs from data using GMM fitting
+  </Card>
+  
+  <Card title="Flexible evidence" icon="bullseye">
+    Support for hard evidence (Dirac-limit) with numerically-stable covariance regularization
+  </Card>
+</CardGroup>
+
+## Use cases
+
+- **Uncertainty quantification**: Track multiple hypotheses through complex probabilistic models
+- **Non-linear inference**: Handle non-linear relationships that violate Gaussian assumptions
+- **Cyclic dependencies**: Run inference on loopy graphs with convergence guarantees
+- **Data-driven modeling**: Learn factor distributions directly from datasets
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Fusion GMBP with uv and Python 3.10+
+  </Card>
+  
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Run your first inference in minutes
+  </Card>
+</CardGroup>
+
+## Core concepts
+
+### Factor graphs
+
+Fusion GMBP models probabilistic systems as factor graphs with:
+- **Variables**: Continuous random variables you want to infer
+- **Factors**: Learned joint probability distributions (Gaussian Mixtures) over variable subsets
+- **Evidence**: Observed values that constrain the inference
+
+### Belief propagation
+
+The library uses message-passing belief propagation to compute posterior beliefs:
+1. Initialize messages between variables and factors
+2. Iteratively update messages using GMM operations (product, conditioning, marginalization)
+3. Compute posterior beliefs by combining all incoming messages
+4. Monitor convergence with multiple diagnostics
+
+### Gaussian mixtures
+
+Each message and belief is represented as a Gaussian Mixture Model:
+
+```python
+GMMContainer(
+    weights=[0.6, 0.4],           # Component weights
+    means=[[5.0], [10.0]],        # Component means
+    covs=[[[0.5]], [[0.8]]],      # Component covariances
+    var_names=["Y"]               # Variable names
+)
+```
+
+This represents a bimodal distribution where Y could be around 5 (60% weight) or around 10 (40% weight).
+
+## Architecture
+
+Fusion GMBP is designed with modularity in mind:
+
+- **CLI interface**: `gmbp` command with `fit`, `run`, `analyze` subcommands
+- **Python API**: Direct access to `BPEngine`, `GMMContainer`, and GMM operations
+- **Web visualizer**: Interactive step-by-step inference exploration
+- **Analysis tools**: Complexity sweeps, validation splits, and model selection
+
+<Info>
+The library is actively developed and documents current design constraints. Check the [README](https://gitlab-lr8991.kit.edu/luisa.hoffmann/fusion-gmbp/-/wikis/home) for the latest updates.
+</Info>

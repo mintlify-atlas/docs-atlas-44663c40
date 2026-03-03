@@ -1,0 +1,373 @@
+---
+title: Evidence handling
+description: Learn the difference between hard and soft evidence and how to incorporate observations into Fusion GMBP
+---
+
+Evidence represents observed values for variables in your model. Fusion GMBP supports both **hard evidence** (exact observations) and **soft evidence** (uncertain observations represented as distributions).
+
+## Evidence types
+
+From `gmm_ops.py:90`:
+
+```python
+@dataclass
+class Evidence:
+    """
+    Unified container for hard and soft evidence.
+    Hard evidence: means defined, covs=0 (or small), weights=[1.0]
+    Soft evidence: GMM structure with multiple components
+    """
+    weights: np.ndarray  # Component weights
+    means: np.ndarray    # Component means (shape: K, D)
+    covs: np.ndarray     # Component covariances (shape: K, D, D)
+```
+
+Both types use the same container but differ in their covariance structure.
+
+## Hard evidence
+
+Hard evidence represents **exact observations** where the value is known with certainty. Mathematically, this is a Dirac delta function δ(x - x₀).
+
+From `gmm_ops.py:143`:
+
+```python
+@classmethod
+def from_hard(cls, values: np.ndarray) -> Evidence:
+    """Create hard evidence from exact values."""
+    return cls(
+        weights=np.array([1.0]),
+        means=values[np.newaxis, :],
+        covs=np.zeros((1, len(values), len(values)))
+    )
+```
+
+### Using hard evidence
+
+```python
+from gmbp import Evidence
+
+# Single variable observation
+shell_evidence = Evidence.from_hard([0.4])
+
+# Create engine with evidence
+engine = BPEngine(
+    factors=factors,
+    neighbors=neighbors,
+    factor_scopes=factor_scopes,
+    evidence={"SHELL": shell_evidence}
+)
+```
+
+From the CLI:
+
+```bash
+# Single observation
+gmbp run --schema abalone --evidence "SHELL=0.4"
+
+# Multiple observations
+gmbp run --schema abalone \
+  --evidence "SHELL=0.4" \
+  --evidence "RINGS=9"
+```
+
+### Numerical handling
+
+From the README:
+
+> Hard evidence (Dirac-limit, zero covariance) is supported in conditioning and evaluated with numerically-stable covariance regularization.
+
+Zero covariance matrices are singular and can cause numerical issues. Fusion GMBP handles this with careful regularization in conditioning operations.
+
+From `gmm_ops.py:157`:
+
+```python
+def condition_gaussian_component(
+    mu: np.ndarray,
+    sigma: np.ndarray,
+    obs_idx: List[int],
+    target_idx: List[int],
+    obs_val: np.ndarray,
+    obs_cov: np.ndarray,  # Zero for hard evidence
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Conditions a single Gaussian component on observed values.
+    """
+    # Innovation covariance: S = Sigma_oo + obs_cov
+    S = _project_to_psd(s_oo + obs_cov, min_eig=1e-12)
+    
+    # For hard evidence, obs_cov is zero, so S = s_oo
+    # Likelihood evaluation uses jittered covariance for stability
+    S_eval = _project_to_psd(_symmetrize_with_jitter(S, jitter=1e-10), min_eig=1e-12)
+    log_lik = multivariate_normal.logpdf(obs_val, mean=mu_o, cov=S_eval)
+```
+
+<Warning>
+Hard evidence with exactly zero covariance is numerically delicate. The implementation adds small jitter (1e-10) when evaluating likelihoods to maintain numerical stability.
+</Warning>
+
+## Soft evidence
+
+Soft evidence represents **uncertain observations** as probability distributions. This is useful when:
+- Measurements have known uncertainty
+- You have indirect observations (e.g., a noisy sensor)
+- You want to express preferences rather than constraints
+
+### Creating soft evidence
+
+```python
+# Single component with uncertainty
+soft_evidence = Evidence(
+    weights=np.array([1.0]),
+    means=np.array([[0.4]]),
+    covs=np.array([[[0.01]]])  # Variance = 0.01
+)
+
+engine = BPEngine(
+    factors=factors,
+    neighbors=neighbors,
+    factor_scopes=factor_scopes,
+    evidence={"SHELL": soft_evidence}
+)
+```
+
+### Multi-modal soft evidence
+
+Soft evidence can itself be a mixture, representing multiple possible observations:
+
+```python
+# "SHELL is either around 0.3 or around 0.5"
+bimodal_evidence = Evidence(
+    weights=np.array([0.6, 0.4]),
+    means=np.array([[0.3], [0.5]]),
+    covs=np.array([[[0.005]], [[0.005]]])
+)
+```
+
+### From GMM
+
+You can create soft evidence from any GMM:
+
+```python
+from gmbp.gmm_ops import Evidence, GMMContainer
+
+# Some prior distribution
+prior = GMMContainer(
+    weights=np.array([0.5, 0.5]),
+    means=np.array([[0.3], [0.6]]),
+    covs=np.array([[[0.01]], [[0.01]]]),
+    var_names=["SHELL"]
+)
+
+# Convert to evidence
+evidence = Evidence.from_gmm(prior)
+```
+
+From `gmm_ops.py:152`:
+
+```python
+@classmethod
+def from_gmm(cls, gmm: GMMContainer) -> Evidence:
+    return cls(
+        weights=gmm.weights,
+        means=gmm.means,
+        covs=gmm.covs
+    )
+```
+
+## Evidence validation
+
+From `gmm_ops.py:102`, evidence is validated on construction:
+
+```python
+def __post_init__(self):
+    # Shape validation
+    if self.weights.ndim != 1:
+        raise ValueError("Evidence weights must be 1D")
+    if self.means.ndim != 2:
+        raise ValueError("Evidence means must be 2D")
+    if self.covs.ndim != 3:
+        raise ValueError("Evidence covs must be 3D")
+    
+    # Value validation
+    if np.any(self.weights < 0):
+        raise ValueError("Evidence weights must be non-negative")
+    if not np.all(np.isfinite(self.weights)):
+        raise ValueError("Evidence weights must be finite")
+    if not np.all(np.isfinite(self.means)):
+        raise ValueError("Evidence means must be finite")
+    if not np.all(np.isfinite(self.covs)):
+        raise ValueError("Evidence covariances must be finite")
+    
+    # Covariance PSD projection
+    for k in range(n_components):
+        self.covs[k] = _project_to_psd(
+            _symmetrize_with_jitter(self.covs[k], jitter=0.0),
+            min_eig=0.0
+        )
+    
+    # Normalize weights
+    total = np.sum(self.weights)
+    if total <= 0:
+        raise ValueError("Evidence weights must sum to positive value")
+    self.weights = self.weights / total
+```
+
+<Info>
+From the README: "Evidence inputs are validated/normalized before conditioning (finite non-negative weights, consistent dimensions, PSD-projected covariances) to keep the closed-form updates numerically sound."
+</Info>
+
+## Evidence in message passing
+
+Evidence is incorporated at variable nodes during variable-to-factor message computation.
+
+From `bp_messages.py:102`:
+
+```python
+def compute_variable_to_factor_msg(
+    incoming_messages: List[GMMContainer],
+    evidence: Optional[Evidence] = None,
+    max_components: int = 20,
+) -> GMMContainer:
+    """
+    Computes message from variable to factor.
+    Combines incoming messages with local evidence.
+    """
+    current_gmm = None
+    
+    # Incorporate evidence first
+    if evidence is not None:
+        current_gmm = GMMContainer(
+            weights=evidence.weights,
+            means=evidence.means,
+            covs=evidence.covs,
+            var_names=[variable_name],
+        )
+    
+    # Multiply with incoming factor messages
+    for msg in incoming_messages:
+        if current_gmm is None:
+            current_gmm = msg
+        else:
+            current_gmm = multiply_gmms(current_gmm, msg)
+            current_gmm = reduce_gmm(current_gmm, max_components)
+    
+    return current_gmm
+```
+
+### Evidence seeding
+
+Optionally, evidence can be used to initialize messages at the start of BP:
+
+```python
+engine.initialize_messages(
+    seed_with_evidence=True  # Use evidence to seed V→F messages
+)
+```
+
+From `bp_engine.py:35`:
+
+```python
+def initialize_messages(
+    self,
+    default_mean: float = 0.0,
+    default_var: float = 10.0,
+    seed_with_evidence: bool = False,
+) -> None:
+    """
+    When seed_with_evidence=True, variable->factor messages for observed
+    variables are initialized directly from evidence, which can reduce
+    burn-in iterations on evidence-heavy loopy graphs.
+    """
+    for var_name in self.neighbors:
+        if seed_with_evidence and var_name in self.evidence:
+            ev = self.evidence[var_name]
+            v2f_seed = GMMContainer(
+                weights=ev.weights.copy(),
+                means=ev.means.copy(),
+                covs=ev.covs.copy(),
+                var_names=[var_name],
+            )
+        else:
+            # Broad prior initialization
+            v2f_seed = self._create_broad_msg(var_name, default_mean, default_var)
+```
+
+From the CLI:
+
+```bash
+gmbp run --schema abalone --evidence "SHELL=0.4" \
+  --seed-messages-with-evidence
+```
+
+<Tip>
+Evidence seeding can significantly reduce the number of BP iterations needed for convergence, especially when you have strong evidence on many variables.
+</Tip>
+
+## Multi-variable evidence
+
+From the README:
+
+> Multi-variable evidence should be injected through variable nodes (or decomposed into per-variable messages), not as a single mis-scoped message.
+
+This means:
+
+<Note>
+**Correct**: Set evidence independently on each observed variable
+```python
+evidence = {
+    "SHELL": Evidence.from_hard([0.4]),
+    "RINGS": Evidence.from_hard([9])
+}
+```
+</Note>
+
+<Warning>
+**Incorrect**: Don't create a single evidence object spanning multiple variables and inject it at a factor
+```python
+# This violates the message passing protocol
+joint_evidence = Evidence(
+    weights=np.array([1.0]),
+    means=np.array([[0.4, 9]]),  # Two variables
+    covs=np.zeros((1, 2, 2))
+)
+```
+</Warning>
+
+The BP algorithm expects:
+- Each variable node has at most one evidence distribution
+- Factor nodes do not have evidence (evidence flows through variable nodes)
+- Variable-to-factor messages are always unary (single variable)
+
+## Hard vs soft: When to use each
+
+| Scenario | Evidence Type | Example |
+|----------|--------------|----------|
+| Exact measurement | Hard | Temperature sensor reads exactly 20.5°C |
+| Measurement with known error | Soft | Temperature sensor ± 0.1°C |
+| Multiple possible values | Soft (multi-modal) | "Color is red or blue" |
+| Preference or constraint | Soft | "Value should be around 5" |
+| Missing data | None | No evidence, pure inference from other variables |
+| Threshold constraint | Soft | "Value > 10" → broad distribution starting at 10 |
+
+<Accordion title="Example: Sensor fusion">
+When combining multiple noisy sensors, use soft evidence:
+
+```python
+# Sensor 1: SHELL ≈ 0.40 ± 0.02
+sensor1 = Evidence(
+    weights=np.array([1.0]),
+    means=np.array([[0.40]]),
+    covs=np.array([[[0.0004]]])  # variance = 0.02^2
+)
+
+# Sensor 2: SHELL ≈ 0.42 ± 0.03
+sensor2 = Evidence(
+    weights=np.array([1.0]),
+    means=np.array([[0.42]]),
+    covs=np.array([[[0.0009]]])  # variance = 0.03^2
+)
+
+# Combine via GMM multiplication (not shown here)
+# The result will weight sensor1 more heavily (smaller variance)
+```
+</Accordion>

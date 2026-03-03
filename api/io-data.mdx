@@ -1,0 +1,215 @@
+---
+title: Data I/O
+description: Functions for loading datasets and extracting factor matrices
+---
+
+The `io_data` module provides utilities for loading data from CSV files, resolving schema paths, and extracting factor matrices for probabilistic inference.
+
+## load_data
+
+Loads data from a CSV file and aligns it with the provided schema.
+
+```python
+load_data(
+    path: Optional[Union[str, Path]] = None,
+    schema: Optional[GraphSchema] = None
+) -> pd.DataFrame
+```
+
+### Parameters
+
+<ParamField path="path" type="Optional[Union[str, Path]]" default="None">
+  Path to the CSV file or dataset name. If `None`, defaults to `'abalone'`.
+  
+  The function supports multiple resolution strategies:
+  - Exact file paths (absolute or relative)
+  - Dataset names (e.g., `"abalone"` searches in configured data directories)
+  - Nested dataset structures (e.g., `data/abalone/abalone.csv`)
+</ParamField>
+
+<ParamField path="schema" type="Optional[GraphSchema]" default="None">
+  Optional `GraphSchema` defining variables and column mappings.
+  
+  When provided, the function:
+  - Renames columns based on the schema's `column_map`
+  - Validates that all required variables exist
+  - Filters and converts columns to float type
+</ParamField>
+
+### Returns
+
+<ResponseField name="dataframe" type="pd.DataFrame">
+  DataFrame with standardized column names matching variable names from the schema.
+  
+  If no schema is provided, returns the raw CSV data. With a schema, returns only the variables defined in the schema, converted to float type.
+</ResponseField>
+
+### Raises
+
+- `FileNotFoundError` - If the CSV file cannot be found
+- `ValueError` - If dataset is missing required schema variables or conversion to float fails
+
+### Example
+
+```python
+from gmbp.io_data import load_data
+from gmbp.schema import GraphSchema
+
+# Load default dataset (abalone)
+df = load_data()
+
+# Load specific dataset by name
+df = load_data("mydataset")
+
+# Load with explicit path
+df = load_data("/path/to/data.csv")
+
+# Load with schema alignment
+schema = GraphSchema.load("schema.json")
+df = load_data("abalone", schema=schema)
+```
+
+<Info>
+  The data resolution logic searches multiple locations in order:
+  1. Exact file path (as provided or relative to CWD)
+  2. Files inside configured data roots (flat structure)
+  3. Files inside dataset subdirectories (nested structure)
+  4. Legacy flat patterns (`<name>.csv`)
+</Info>
+
+---
+
+## get_factor_matrix
+
+Extracts a numpy matrix for the given scope (list of variable names).
+
+```python
+get_factor_matrix(
+    df: pd.DataFrame,
+    scope: List[str]
+) -> np.ndarray
+```
+
+### Parameters
+
+<ParamField path="df" type="pd.DataFrame" required>
+  Input DataFrame containing the data. Typically obtained from `load_data()`.
+</ParamField>
+
+<ParamField path="scope" type="List[str]" required>
+  List of variable names to extract from the DataFrame.
+  
+  The order of variables in the scope determines the column order in the output matrix.
+</ParamField>
+
+### Returns
+
+<ResponseField name="matrix" type="np.ndarray">
+  Numpy array with shape `(n_samples, len(scope))` where columns correspond to the order specified in `scope`.
+</ResponseField>
+
+### Raises
+
+- `ValueError` - If any variables in `scope` are not found in DataFrame columns
+
+### Example
+
+```python
+import numpy as np
+from gmbp.io_data import load_data, get_factor_matrix
+
+# Load data
+df = load_data("abalone")
+
+# Extract matrix for specific variables
+scope = ["Length", "Diameter", "Height"]
+matrix = get_factor_matrix(df, scope)
+
+print(matrix.shape)  # (n_samples, 3)
+print(type(matrix))  # <class 'numpy.ndarray'>
+```
+
+<Note>
+  This function is commonly used to prepare data for factor operations in belief propagation, where each factor operates on a specific scope of variables.
+</Note>
+
+---
+
+## find_schema_path
+
+Finds and resolves a schema JSON file path.
+
+```python
+find_schema_path(
+    name_or_path: Union[str, Path],
+    data_hint: Optional[Union[str, Path]] = None,
+    allow_dataset_schema_fallback: bool = False
+) -> Path
+```
+
+### Parameters
+
+<ParamField path="name_or_path" type="Union[str, Path]" required>
+  Schema file name or path to resolve.
+  
+  Can be:
+  - A schema filename (e.g., `"schema_nd.json"` or `"schema_nd"`)
+  - A relative or absolute path to a schema file
+  - A dataset name that contains a schema file
+</ParamField>
+
+<ParamField path="data_hint" type="Optional[Union[str, Path]]" default="None">
+  Optional hint to resolve the schema within a specific dataset context.
+  
+  When provided, the function first searches for the schema inside the hinted dataset folder before falling back to generic resolution.
+  
+  Example: `data_hint="abalone"` will search in `data/abalone/` first.
+</ParamField>
+
+<ParamField path="allow_dataset_schema_fallback" type="bool" default="False">
+  If `True` and the specific schema is not found in the hinted dataset folder, falls back to `schema.json` in that folder.
+</ParamField>
+
+### Returns
+
+<ResponseField name="path" type="Path">
+  Resolved absolute path to the schema JSON file.
+</ResponseField>
+
+### Raises
+
+- `FileNotFoundError` - If the schema file cannot be found or if multiple matches are found without a data hint
+
+### Example
+
+```python
+from gmbp.io_data import find_schema_path
+
+# Find schema by name (searches all data directories)
+schema_path = find_schema_path("schema_nd")
+
+# Find schema within specific dataset
+schema_path = find_schema_path("schema_nd", data_hint="abalone")
+
+# Use fallback to default schema.json if specific not found
+schema_path = find_schema_path(
+    "schema_custom",
+    data_hint="abalone",
+    allow_dataset_schema_fallback=True
+)
+
+# Load the schema
+from gmbp.schema import GraphSchema
+schema = GraphSchema.load(schema_path)
+```
+
+<Info>
+  **Resolution priority when `data_hint` is provided:**
+  1. Resolve inside hinted dataset folder first
+  2. If `allow_dataset_schema_fallback=True`, try `schema.json` in dataset folder
+  3. Fall back to generic schema resolution across all data directories
+  
+  **Without `data_hint`:**
+  - Searches across all configured data roots and dataset subdirectories
+  - Raises an error if multiple matches are found (ambiguous)
+</Info>

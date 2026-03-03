@@ -1,0 +1,220 @@
+---
+title: Evidence
+description: Unified container for hard and soft evidence observations
+---
+
+## Overview
+
+The `Evidence` class represents observations on variables in the factor graph. It supports both:
+- **Hard evidence**: Exact observations with zero uncertainty (Dirac delta)
+- **Soft evidence**: Uncertain observations represented as Gaussian mixtures
+
+## Class signature
+
+```python
+@dataclass
+class Evidence:
+    weights: np.ndarray
+    means: np.ndarray
+    covs: np.ndarray
+```
+
+<ParamField path="weights" type="np.ndarray" required>
+  Component weights for the evidence mixture. Shape: `(K,)` where K is the number of components. Must be non-negative and sum to a positive value (automatically normalized).
+</ParamField>
+
+<ParamField path="means" type="np.ndarray" required>
+  Mean values for each component. Shape: `(K, D)` where K is the number of components and D is the dimensionality of the observed variable(s).
+</ParamField>
+
+<ParamField path="covs" type="np.ndarray" required>
+  Covariance matrices for each component. Shape: `(K, D, D)`. For hard evidence, use zeros or very small values to represent Dirac delta behavior.
+</ParamField>
+
+<Note>
+All arrays are automatically validated and normalized during initialization:
+- Weights must be finite and non-negative
+- Covariances are projected to be symmetric positive semi-definite
+- Weights are normalized to sum to 1.0
+</Note>
+
+## Factory methods
+
+### from_hard
+
+Create hard evidence from exact observation values (zero uncertainty).
+
+```python
+@classmethod
+def from_hard(cls, values: np.ndarray) -> Evidence
+```
+
+<ParamField path="values" type="np.ndarray" required>
+  Observed values. Shape: `(D,)` where D is the dimensionality.
+</ParamField>
+
+<ResponseField name="evidence" type="Evidence">
+  Evidence object representing a single-component mixture with zero covariance
+</ResponseField>
+
+#### Example
+
+```python
+import numpy as np
+from gmbp import Evidence
+
+# Single variable hard evidence
+shell_obs = Evidence.from_hard(np.array([0.4]))
+
+# Multi-variable hard evidence
+joint_obs = Evidence.from_hard(np.array([0.4, 0.3, 1.2]))
+```
+
+### from_gmm
+
+Create soft evidence from a Gaussian Mixture Model.
+
+```python
+@classmethod
+def from_gmm(cls, gmm: GMMContainer) -> Evidence
+```
+
+<ParamField path="gmm" type="GMMContainer" required>
+  Gaussian Mixture Model container with weights, means, and covariances
+</ParamField>
+
+<ResponseField name="evidence" type="Evidence">
+  Evidence object representing the soft observation as a mixture
+</ResponseField>
+
+#### Example
+
+```python
+from gmbp import Evidence, GMMContainer
+import numpy as np
+
+# Create a bimodal soft observation
+gmm = GMMContainer(
+    weights=np.array([0.6, 0.4]),
+    means=np.array([[0.3], [0.7]]),
+    covs=np.array([[[0.01]], [[0.01]]]),
+    var_names=["SHELL"]
+)
+
+soft_evidence = Evidence.from_gmm(gmm)
+```
+
+## Validation
+
+The `Evidence` class performs strict validation in `__post_init__`:
+
+1. **Shape consistency**: Ensures weights, means, and covariances have consistent dimensions
+2. **Finite values**: All numeric values must be finite (no NaN or Inf)
+3. **Non-negative weights**: Weights must be ≥ 0
+4. **Positive definite covariances**: Covariances are projected to symmetric PSD matrices
+5. **Weight normalization**: Weights are normalized to sum to 1.0
+
+<Warning>
+If validation fails, a `ValueError` is raised with a descriptive message. This ensures numerical stability during belief propagation.
+</Warning>
+
+## Usage patterns
+
+### Hard evidence (exact observation)
+
+```python
+from gmbp import Evidence, BPEngine
+import numpy as np
+
+# Observe SHELL = 0.4 exactly
+evidence = {
+    "SHELL": Evidence.from_hard(np.array([0.4]))
+}
+
+engine = BPEngine(factors, neighbors, factor_scopes, evidence)
+```
+
+### Soft evidence (uncertain observation)
+
+```python
+import numpy as np
+from gmbp import Evidence
+
+# Uncertain observation: SHELL is around 0.4 with std dev 0.05
+evidence_dict = {
+    "SHELL": Evidence(
+        weights=np.array([1.0]),
+        means=np.array([[0.4]]),
+        covs=np.array([[[0.0025]]])  # variance = 0.05^2
+    )
+}
+```
+
+### Multimodal soft evidence
+
+```python
+import numpy as np
+from gmbp import Evidence
+
+# SHELL could be around 0.3 (60% likely) or 0.6 (40% likely)
+evidence_dict = {
+    "SHELL": Evidence(
+        weights=np.array([0.6, 0.4]),
+        means=np.array([[0.3], [0.6]]),
+        covs=np.array([[[0.01]], [[0.01]]])
+    )
+}
+```
+
+### Multiple variables
+
+```python
+import numpy as np
+from gmbp import Evidence
+
+# Observe multiple variables
+evidence_dict = {
+    "SHELL": Evidence.from_hard(np.array([0.4])),
+    "LENGTH": Evidence.from_hard(np.array([0.5])),
+    "DIAMETER": Evidence(
+        weights=np.array([1.0]),
+        means=np.array([[0.38]]),
+        covs=np.array([[[0.001]]])
+    )
+}
+
+engine = BPEngine(factors, neighbors, factor_scopes, evidence_dict)
+```
+
+## Technical notes
+
+### Hard evidence implementation
+
+Hard evidence uses zero covariance matrices to represent Dirac delta distributions. During conditioning, the implementation uses numerically-stable covariance regularization (small jitter) when evaluating likelihoods to avoid numerical issues with singular matrices.
+
+```python
+# Hard evidence is internally represented as:
+Evidence(
+    weights=np.array([1.0]),
+    means=values[np.newaxis, :],
+    covs=np.zeros((1, len(values), len(values)))
+)
+```
+
+### Numerical stability
+
+The Evidence class includes several numerical safeguards:
+
+1. **Covariance symmetrization**: `cov = 0.5 * (cov + cov.T)`
+2. **PSD projection**: Eigenvalue flooring to ensure positive semi-definiteness
+3. **Weight clipping**: During internal operations, weights are clipped to `[1e-15, 1.0]`
+4. **Log-space normalization**: Weight updates use log-space arithmetic to prevent underflow
+
+<Tip>
+For very small uncertainties (but not exactly zero), use covariances around `1e-6` to `1e-4` rather than exactly zero. This maintains numerical stability while representing near-certain observations.
+</Tip>
+
+## Related
+
+- [BPEngine](/api/bp-engine) - Use evidence in belief propagation
+- [GMMContainer](/api/gmm-container) - Gaussian Mixture representation

@@ -1,0 +1,501 @@
+---
+title: Notebooks
+description: Use the interactive experiment template for custom analysis, visualization, and experimentation
+---
+
+Fusion GMBP includes a Python notebook template for interactive experimentation with belief propagation. The template supports both Jupyter notebooks and VS Code's Python cell execution.
+
+## Installation
+
+Install notebook dependencies:
+
+```bash
+uv pip install -e ".[notebooks]"
+```
+
+This installs:
+- Jupyter (notebook environment)
+- Matplotlib (visualization library)
+
+<Info>
+Matplotlib is optional for the core library and CLI. It's only required for notebook-based visualization.
+</Info>
+
+## Template overview
+
+The experiment template is located at:
+
+```
+notebooks/template_experiment.py
+```
+
+This file uses `# %%` cell markers for interactive execution in:
+- Jupyter Lab/Notebook
+- VS Code with Python extension
+- PyCharm Professional
+- Spyder
+
+<Note>
+The template is a `.py` file, not `.ipynb`, which makes it easier to version control and diff. All major IDEs recognize the `# %%` cell format.
+</Note>
+
+## Running the template
+
+### Option 1: VS Code
+
+<Steps>
+  <Step title="Open the template">
+    Open `notebooks/template_experiment.py` in VS Code
+  </Step>
+
+  <Step title="Select Python environment">
+    Ensure your `uv` virtual environment is selected:
+    - Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac)
+    - Type "Python: Select Interpreter"
+    - Choose the `.venv/bin/python` interpreter
+  </Step>
+
+  <Step title="Run cells interactively">
+    Click "Run Cell" above each `# %%` marker, or use `Shift+Enter` to execute cells
+  </Step>
+</Steps>
+
+### Option 2: Jupyter
+
+<Steps>
+  <Step title="Convert to notebook" icon="code">
+    Use `jupytext` to convert the `.py` file to `.ipynb`:
+
+    ```bash
+    uv pip install jupytext
+    jupytext --to notebook notebooks/template_experiment.py
+    ```
+  </Step>
+
+  <Step title="Launch Jupyter">
+    Start Jupyter Lab:
+
+    ```bash
+    uv run jupyter lab
+    ```
+  </Step>
+
+  <Step title="Open and run">
+    Open `template_experiment.ipynb` and run cells
+  </Step>
+</Steps>
+
+### Option 3: Direct execution
+
+Run the entire script:
+
+```bash
+uv run python notebooks/template_experiment.py
+```
+
+<Warning>
+Direct execution runs all cells sequentially without interactive output. Use IDE cell execution or Jupyter for exploratory analysis.
+</Warning>
+
+## Template structure
+
+The template is organized into sections:
+
+### 1. Imports and setup
+
+Imports core GMBP modules and configures matplotlib:
+
+```python
+import json
+import logging
+import matplotlib.pyplot as plt
+import numpy as np
+
+from gmbp.bp_engine import BPEngine
+from gmbp.gmm_fit import fit_joint_gmm, load_factor
+from gmbp.gmm_ops import Evidence
+from gmbp.io_data import get_factor_matrix, load_data
+from gmbp.schema import GraphSchema
+```
+
+Matplotlib configuration:
+```python
+plt.rcParams["figure.figsize"] = (12, 5)
+plt.rcParams["figure.dpi"] = 120
+```
+
+### 2. Load schema and data
+
+Select dataset and schema file:
+
+```python
+SCHEMA_FILE = "schema_nd.json"
+DATASET = "abalone"
+
+schema_path = DATA_DIR / DATASET / SCHEMA_FILE
+with open(schema_path) as f:
+    schema = GraphSchema.from_dict(json.load(f))
+
+df = load_data(schema=schema)
+```
+
+<Tip>
+Swap `SCHEMA_FILE` between `"schema.json"` and `"schema_nd.json"` to compare pairwise vs. N-dimensional factors.
+</Tip>
+
+### 3. Fit or load GMM factors
+
+Trains or loads factors with caching:
+
+```python
+K = 10           # GMM components per factor
+SEED = 42
+FORCE_RETRAIN = False
+
+factors = {}
+for fdef in schema.factors:
+    path = get_factor_filename(fdef.name, K, directory=factor_dir)
+    if path.exists() and not FORCE_RETRAIN:
+        factors[fdef.name] = load_factor(fdef.name, K, directory=factor_dir)
+    else:
+        X = get_factor_matrix(df, fdef.scope)
+        gmm, nll = fit_joint_gmm(X, K=K, seed=SEED, var_names=fdef.scope)
+        save_factor(gmm, fdef.name, nll, directory=factor_dir)
+        factors[fdef.name] = gmm
+```
+
+<Accordion title="Caching behavior">
+- Factors are saved to `artifacts/nb_{timestamp}/factors/`
+- Set `FORCE_RETRAIN = True` to refit even if cached factors exist
+- Cached factors enable fast iteration during experimentation
+</Accordion>
+
+### 4. Define evidence and run BP
+
+Set observation and execute belief propagation:
+
+```python
+EVIDENCE_VAR = "SHELL"
+EVIDENCE_VAL = 0.4
+MAX_COMPONENTS = 20
+N_ITERATIONS = 5
+
+evidence_map = {EVIDENCE_VAR: Evidence.from_hard(np.array([EVIDENCE_VAL]))}
+
+engine = BPEngine(
+    factors=factors,
+    neighbors=schema.get_neighbors(),
+    factor_scopes=schema.get_factor_scopes(),
+    evidence=evidence_map,
+)
+engine.initialize_messages()
+```
+
+Run iteration-by-iteration and collect history:
+
+```python
+history = []
+history.append(("init", engine.compute_beliefs(max_components=MAX_COMPONENTS)))
+
+for i in range(1, N_ITERATIONS + 1):
+    stats = engine.run(max_iter=1, max_components=MAX_COMPONENTS)
+    beliefs = engine.compute_beliefs(max_components=MAX_COMPONENTS)
+    history.append((f"iter {i}", beliefs))
+```
+
+### 5. Visualize posterior evolution
+
+Plot how posteriors change across iterations:
+
+```python
+def plot_posterior_evolution(var_name, history, ax=None):
+    # Plot density curves for each iteration
+    for idx, (label, beliefs) in enumerate(history):
+        gmm = beliefs[var_name]
+        # ... compute mixture density ...
+        ax.plot(x, density, label=label)
+```
+
+Generate multi-panel visualization:
+
+```python
+non_evidence_vars = [v for v in schema.variables if v != EVIDENCE_VAR]
+fig, axes = plt.subplots(rows, cols, figsize=(14, 4 * rows))
+
+for i, var in enumerate(non_evidence_vars):
+    plot_posterior_evolution(var, history, ax=axes_flat[i])
+```
+
+### 6. Iteration comparison table
+
+Generate tabular comparison of beliefs:
+
+```python
+import pandas as pd
+
+rows_data = []
+for label, beliefs in history:
+    s = belief_summary(beliefs)
+    for var, info in s.items():
+        rows_data.append({
+            "iteration": label,
+            "variable": var,
+            "mean": info["mean"],
+            "std": info["std"],
+            "K": info["K"]
+        })
+
+comp_df = pd.DataFrame(rows_data)
+pivot = comp_df.pivot_table(index="variable", columns="iteration", values=["mean", "std"])
+```
+
+## Customization examples
+
+### Experiment 1: Compare convergence rates
+
+Compare different damping values:
+
+```python
+damping_values = [0.0, 0.2, 0.4, 0.6]
+results = {}
+
+for damp in damping_values:
+    engine = BPEngine(factors, neighbors, factor_scopes, evidence_map)
+    engine.initialize_messages()
+    
+    deltas = []
+    for i in range(20):
+        stats = engine.run(max_iter=1, max_components=20, damping=damp)
+        deltas.append(stats['max_delta'])
+    
+    results[damp] = deltas
+
+# Plot convergence curves
+for damp, deltas in results.items():
+    plt.semilogy(deltas, label=f"damping={damp}")
+plt.xlabel("Iteration")
+plt.ylabel("Max Delta")
+plt.legend()
+plt.title("Convergence Comparison")
+```
+
+### Experiment 2: Evidence sensitivity
+
+Sweep evidence values and observe posterior changes:
+
+```python
+evidence_sweep = np.linspace(0.1, 0.6, 10)
+posterior_means = {var: [] for var in schema.variables}
+
+for ev_val in evidence_sweep:
+    evidence_map = {"SHELL": Evidence.from_hard(np.array([ev_val]))}
+    engine = BPEngine(factors, neighbors, factor_scopes, evidence_map)
+    engine.initialize_messages()
+    engine.run(max_iter=10, max_components=20, damping=0.3)
+    
+    beliefs = engine.compute_beliefs(max_components=20)
+    for var, gmm in beliefs.items():
+        mean = float(np.sum(gmm.weights * gmm.means.flatten()))
+        posterior_means[var].append(mean)
+
+# Plot sensitivity curves
+for var, means in posterior_means.items():
+    if var != "SHELL":
+        plt.plot(evidence_sweep, means, label=var, marker='o')
+plt.xlabel("SHELL Evidence Value")
+plt.ylabel("Posterior Mean")
+plt.legend()
+plt.title("Evidence Sensitivity Analysis")
+```
+
+### Experiment 3: Mixture component analysis
+
+Compare different K values:
+
+```python
+K_values = [5, 10, 15, 20]
+for K in K_values:
+    factors_k = {}
+    for fdef in schema.factors:
+        X = get_factor_matrix(df, fdef.scope)
+        gmm, nll = fit_joint_gmm(X, K=K, seed=42, var_names=fdef.scope)
+        factors_k[fdef.name] = gmm
+        print(f"K={K}, {fdef.name}: NLL={nll:.4f}")
+    
+    # Run inference with this K
+    engine = BPEngine(factors_k, neighbors, factor_scopes, evidence_map)
+    engine.initialize_messages()
+    stats = engine.run(max_iter=10, max_components=K*2)
+    print(f"K={K}: converged={stats['converged']}, max_delta={stats['max_delta']:.4e}")
+```
+
+## Visualization recipes
+
+### 2D joint density plot
+
+Visualize pairwise factor fit:
+
+```python
+def plot_2d_factor_fit(factor_gmm, X, var_names):
+    fig, ax = plt.subplots(figsize=(8, 8))
+    
+    # Scatter plot of data
+    ax.scatter(X[:, 0], X[:, 1], alpha=0.3, s=10, label="Data")
+    
+    # Plot mixture ellipses
+    for k in range(factor_gmm.n_components):
+        mean = factor_gmm.means[k]
+        cov = factor_gmm.covs[k]
+        # ... draw ellipse ...
+    
+    ax.set_xlabel(var_names[0])
+    ax.set_ylabel(var_names[1])
+    ax.legend()
+    plt.show()
+
+# Use it
+X = get_factor_matrix(df, ["LENGTH", "DIAMETER"])
+plot_2d_factor_fit(factors["f_len_diam"], X, ["LENGTH", "DIAMETER"])
+```
+
+### Marginal vs. posterior overlay
+
+Compare data marginal to posterior belief:
+
+```python
+def plot_marginal_vs_posterior(var_name, df, belief_gmm):
+    fig, ax = plt.subplots(figsize=(10, 4))
+    
+    # Data histogram
+    col = schema.column_map[var_name]
+    ax.hist(df[col].dropna(), bins=50, density=True, 
+            alpha=0.5, label="Data")
+    
+    # Posterior density
+    x = np.linspace(df[col].min(), df[col].max(), 500)
+    density = # ... compute from belief_gmm ...
+    ax.plot(x, density, linewidth=2, label="Posterior")
+    
+    ax.set_xlabel(var_name)
+    ax.set_ylabel("Density")
+    ax.legend()
+    plt.show()
+```
+
+### Convergence diagnostics
+
+Visualize runtime statistics:
+
+```python
+stats = engine.run(max_iter=30, max_components=20, damping=0.3)
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+# Delta trace
+axes[0, 0].semilogy(stats['delta_trace'])
+axes[0, 0].set_title("Max Delta")
+axes[0, 0].set_xlabel("Iteration")
+
+# Damping trace
+axes[0, 1].plot(stats['damping_trace'])
+axes[0, 1].set_title("Damping")
+axes[0, 1].set_xlabel("Iteration")
+
+# Tolerance trace (if convergence enabled)
+if stats['effective_tol_trace']:
+    axes[1, 0].semilogy(stats['effective_tol_trace'])
+    axes[1, 0].set_title("Effective Tolerance")
+    axes[1, 0].set_xlabel("Iteration")
+
+fig.tight_layout()
+plt.show()
+```
+
+## Tips and best practices
+
+<Tip>
+**Duplicate the template**: Copy `template_experiment.py` for each new experiment to preserve your work:
+
+```bash
+cp notebooks/template_experiment.py notebooks/my_experiment.py
+```
+</Tip>
+
+<Tip>
+**Use meaningful run directories**: Customize the output path:
+
+```python
+run_dir = ARTIFACTS_DIR / f"experiment_damping_sweep_{time.strftime('%Y%m%d_%H%M%S')}"
+```
+</Tip>
+
+<Tip>
+**Save figures**: Export plots for reports:
+
+```python
+fig.savefig(run_dir / "posterior_evolution.png", dpi=300, bbox_inches="tight")
+```
+</Tip>
+
+<Warning>
+**Large K values**: Fitting with many components (K > 20) can be slow. Consider using pre-trained factors for interactive work.
+</Warning>
+
+<Tip>
+**Incremental iteration**: Run BP one iteration at a time during exploration:
+
+```python
+for i in range(1, 50):
+    stats = engine.run(max_iter=1, max_components=20)
+    print(f"Iter {i}: delta={stats['max_delta']:.4e}")
+    if stats['max_delta'] < 1e-4:
+        break
+```
+</Tip>
+
+## Integration with CLI results
+
+Combine notebook analysis with CLI outputs:
+
+### Load CLI-generated factors
+
+```python
+# Load factors fitted via CLI
+factors_dir = Path("artifacts/factors")
+factors = {}
+for fdef in schema.factors:
+    factors[fdef.name] = load_factor(fdef.name, K=10, directory=factors_dir)
+```
+
+### Load stats from CLI run
+
+```python
+# Load runtime stats from CLI
+with open("artifacts/run_stats/latest.json") as f:
+    cli_stats = json.load(f)
+
+print(f"CLI converged: {cli_stats['stats']['converged']}")
+print(f"Final beliefs: {cli_stats['beliefs']}")
+```
+
+### Compare CLI vs. notebook runs
+
+```python
+# Run same inference in notebook
+engine = BPEngine(factors, neighbors, factor_scopes, evidence_map)
+engine.initialize_messages()
+stats = engine.run(max_iter=10, max_components=20, damping=0.3)
+beliefs = engine.compute_beliefs(max_components=20)
+
+# Compare
+for var in schema.variables:
+    cli_mean = cli_stats['beliefs'][var]['mean']
+    nb_mean = belief_summary(beliefs)[var]['mean']
+    diff = abs(cli_mean - nb_mean)
+    print(f"{var}: CLI={cli_mean:.4f}, Notebook={nb_mean:.4f}, diff={diff:.4e}")
+```
+
+## Related resources
+
+- [Convergence tuning](/guides/convergence-tuning) - Parameters used in the template
+- [Working with datasets](/guides/working-with-datasets) - Dataset structure for notebook experiments

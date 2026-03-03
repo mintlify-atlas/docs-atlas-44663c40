@@ -1,0 +1,420 @@
+---
+title: gmbp analyze
+description: Analyze model complexity with NLL vs. K sweeps and validation for individual factors or custom scopes
+---
+
+The `gmbp analyze` command performs complexity analysis by sweeping over different numbers of GMM components (K) and measuring the negative log-likelihood (NLL) for a specific factor or custom variable scope. This helps determine the optimal component count for your model.
+
+## Basic usage
+
+```bash
+gmbp analyze --schema abalone --factor f_len_diam_whole --max-k 20
+```
+
+This command:
+1. Loads the schema and dataset
+2. Extracts data for the specified factor scope
+3. Fits GMMs with K = 1, 2, 3, ..., 20 components
+4. Measures train and validation NLL for each K (with default 25% holdout)
+5. Saves results to `artifacts/analysis/`
+
+## Command options
+
+### Required parameters
+
+<ParamField path="--schema" type="string" required>
+  Dataset name or path to schema JSON.
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam_whole
+  ```
+</ParamField>
+
+### Factor or scope selection
+
+You must provide **either** `--factor` or `--scope`:
+
+<ParamField path="--factor" type="string">
+  Name of factor to analyze (from schema definition).
+  
+  The scope is extracted from the factor definition in the schema.
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam_whole
+  ```
+</ParamField>
+
+<ParamField path="--scope" type="string[]">
+  List of variables to analyze (alternative to `--factor`).
+  
+  Allows analyzing custom variable combinations not defined as factors.
+  
+  ```bash
+  gmbp analyze --schema abalone --scope LENGTH DIAMETER WHOLE
+  ```
+</ParamField>
+
+### Optional parameters
+
+<ParamField path="--data" type="string">
+  Dataset name or path to input CSV.
+  
+  If omitted, inferred from `--schema` using the same resolution logic as `gmbp fit`.
+  
+  ```bash
+  gmbp analyze --schema abalone --data abalone --factor f_len_diam_whole
+  ```
+</ParamField>
+
+<ParamField path="--max-k" type="integer" default="20">
+  Maximum components for complexity sweep.
+  
+  The analysis sweeps K from 1 to `max-k` inclusive.
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam_whole --max-k 30
+  ```
+</ParamField>
+
+<ParamField path="--holdout-fraction" type="float" default="0.25">
+  Fraction of samples reserved for validation NLL.
+  
+  - `0.25`: 25% validation, 75% train (default)
+  - `0.0`: No holdout, full-dataset NLL only
+  - `0.2`: 20% validation, 80% train
+  
+  Validation NLL is more reliable for component selection as it measures generalization.
+  
+  ```bash
+  # With validation holdout (recommended)
+  gmbp analyze --schema abalone --factor f_len_diam_whole --holdout-fraction 0.25
+  
+  # Full dataset, no validation
+  gmbp analyze --schema abalone --factor f_len_diam_whole --holdout-fraction 0.0
+  ```
+</ParamField>
+
+<ParamField path="--seed" type="integer" default="42">
+  Random seed for reproducibility.
+  
+  Controls both train/validation split and GMM initialization.
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam_whole --seed 12345
+  ```
+</ParamField>
+
+<ParamField path="--out-dir" type="string" default="artifacts/analysis">
+  Output directory for results.
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam_whole --out-dir results/complexity
+  ```
+</ParamField>
+
+<ParamField path="--results-json" type="string">
+  Optional JSON file to store complexity sweep metrics.
+  
+  Writes machine-readable payload with train/validation NLL per K value for downstream analysis (plotting, comparison, etc.).
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam_whole \
+               --results-json artifacts/analysis/f_len_diam_whole.json
+  ```
+</ParamField>
+
+<ParamField path="--strict-pairwise" type="boolean">
+  Enforce pairwise-only factors.
+  
+  Schema validation fails if any factor scope contains more than 2 variables.
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam --strict-pairwise
+  ```
+</ParamField>
+
+<ParamField path="--verbose" type="boolean">
+  Enable verbose logging. Short form: `-v`
+  
+  ```bash
+  gmbp analyze --schema abalone --factor f_len_diam_whole --verbose
+  ```
+</ParamField>
+
+## Examples
+
+### Basic complexity sweep with validation
+
+Sweep K=1..20 on a specific factor with 25% validation holdout:
+
+```bash
+gmbp analyze --schema abalone --factor f_len_diam_whole \
+             --holdout-fraction 0.25 --max-k 20
+```
+
+### Export results to JSON
+
+Save train/validation NLL metrics for plotting:
+
+```bash
+gmbp analyze --schema abalone --factor f_len_diam_whole \
+             --holdout-fraction 0.25 --max-k 20 \
+             --results-json artifacts/analysis/f_len_diam_whole.json
+```
+
+### Analyze custom variable scope
+
+Test component count for variables not defined as a factor:
+
+```bash
+gmbp analyze --schema abalone --scope LENGTH DIAMETER SHELL --max-k 15
+```
+
+### Full dataset analysis (no holdout)
+
+Use all data for fitting (matches older behavior):
+
+```bash
+gmbp analyze --schema abalone --factor f_len_diam_whole \
+             --holdout-fraction 0.0 --max-k 20
+```
+
+### Extended sweep range
+
+Test higher component counts:
+
+```bash
+gmbp analyze --schema abalone --factor f_len_diam_whole --max-k 50
+```
+
+### Custom output location
+
+```bash
+gmbp analyze --schema abalone --factor f_len_diam_whole \
+             --out-dir results/complexity_sweeps
+```
+
+## Output format
+
+### JSON results file
+
+When using `--results-json`, the output includes:
+
+```json results.json
+{
+  "schema": "abalone",
+  "factor": "f_len_diam_whole",
+  "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+  "holdout_fraction": 0.25,
+  "train_size": 3131,
+  "validation_size": 1044,
+  "seed": 42,
+  "results": [
+    {
+      "k": 1,
+      "train_nll": 3.2145,
+      "val_nll": 3.2298,
+      "runtime": 0.152
+    },
+    {
+      "k": 2,
+      "train_nll": 2.8734,
+      "val_nll": 2.8892,
+      "runtime": 0.234
+    },
+    ...
+  ]
+}
+```
+
+<ResponseField name="schema" type="string">
+  Schema name or path used for analysis.
+</ResponseField>
+
+<ResponseField name="factor" type="string">
+  Factor name, or "custom_scope" if `--scope` was used.
+</ResponseField>
+
+<ResponseField name="scope" type="array">
+  List of variables analyzed.
+</ResponseField>
+
+<ResponseField name="holdout_fraction" type="float">
+  Validation split fraction used.
+</ResponseField>
+
+<ResponseField name="train_size" type="integer">
+  Number of samples used for training.
+</ResponseField>
+
+<ResponseField name="validation_size" type="integer">
+  Number of samples reserved for validation.
+</ResponseField>
+
+<ResponseField name="results" type="array">
+  Per-K metrics:
+  - `k`: Number of components
+  - `train_nll`: Training negative log-likelihood
+  - `val_nll`: Validation negative log-likelihood (if holdout > 0)
+  - `runtime`: Fitting time in seconds
+</ResponseField>
+
+### Without holdout (holdout_fraction=0.0)
+
+When validation is disabled:
+
+```json
+{
+  ...,
+  "holdout_fraction": 0.0,
+  "train_size": 4175,
+  "validation_size": 0,
+  "results": [
+    {
+      "k": 1,
+      "nll": 3.2145,
+      "runtime": 0.152
+    },
+    ...
+  ]
+}
+```
+
+Only `nll` (full-dataset) is provided instead of separate train/val metrics.
+
+## Interpreting results
+
+### Validation NLL curve
+
+The validation NLL curve helps identify optimal K:
+
+```
+K=1:  val_nll=3.23  (underfitting, too simple)
+K=5:  val_nll=2.45  (good fit)
+K=10: val_nll=2.42  (optimal, lowest validation NLL)
+K=20: val_nll=2.48  (overfitting, validation NLL increases)
+```
+
+<Info>
+  **Optimal K selection**: Choose K where validation NLL reaches its minimum. Further increases in K may overfit and hurt generalization.
+</Info>
+
+### Train vs. validation gap
+
+- **Small gap**: Model generalizes well
+- **Large gap**: Overfitting—training NLL continues decreasing while validation NLL plateaus or increases
+
+<Tip>
+  **Rule of thumb**: Use validation NLL (not training NLL) for component selection. Training NLL always decreases with more components, but that doesn't guarantee better inference.
+</Tip>
+
+## Plotting results
+
+Complexity curves are typically visualized using the `notebooks/template_experiment.py` template:
+
+```python plot_complexity.py
+import json
+import matplotlib.pyplot as plt
+
+# Load results
+with open("artifacts/analysis/f_len_diam_whole.json") as f:
+    data = json.load(f)
+
+# Extract curves
+k_values = [r["k"] for r in data["results"]]
+train_nll = [r["train_nll"] for r in data["results"]]
+val_nll = [r["val_nll"] for r in data["results"]]
+
+# Plot
+plt.figure(figsize=(8, 5))
+plt.plot(k_values, train_nll, label="Train NLL", marker="o")
+plt.plot(k_values, val_nll, label="Validation NLL", marker="s")
+plt.xlabel("Number of Components (K)")
+plt.ylabel("Negative Log-Likelihood")
+plt.title(f"Complexity Analysis: {data['factor']}")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+```
+
+Install notebook dependencies:
+```bash
+uv pip install -e ".[notebooks]"
+```
+
+## Schema-wide analysis
+
+For analyzing all factors in a schema at once, use the batch command:
+
+```bash
+gmbp analyze-schema --schema abalone --holdout-fraction 0.25 --max-k 20
+```
+
+See [gmbp analyze-schema documentation](/cli/analyze-schema) for details.
+
+## Error handling
+
+### Factor not found
+
+```
+ERROR - Factor 'f_unknown' not found in schema.
+```
+
+**Solution**: Check factor names in your schema JSON, or use `--scope` instead.
+
+### Missing factor or scope
+
+```
+ERROR - Must provide either --factor or --scope for analysis.
+```
+
+**Solution**: Specify one of:
+- `--factor <factor_name>`
+- `--scope VAR1 VAR2 ...`
+
+### Invalid holdout fraction
+
+```
+ERROR - --holdout-fraction must be in [0, 1)
+```
+
+**Solution**: Use a value between 0.0 (no holdout) and just under 1.0 (e.g., 0.8 for 80% validation).
+
+### Column not found
+
+```
+ERROR - Failed to extract scope variables: Column 'UNKNOWN_VAR' not found in dataset
+```
+
+**Solution**: Verify that `column_map` in your schema correctly maps variable names to CSV columns.
+
+## Performance notes
+
+<Info>
+  **Runtime**: Sweeping K=1..20 typically takes 5-30 seconds per factor depending on dataset size and dimensionality.
+</Info>
+
+<Tip>
+  **Parallel analysis**: For multiple factors, use `gmbp analyze-schema` which processes all factors in one command and aggregates results.
+</Tip>
+
+<Warning>
+  **Large K values**: Sweeping to very high K (>50) can be slow and may not improve fit significantly. Start with `--max-k 20` and increase only if validation curves suggest benefit.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Analyze schema" icon="diagram-project" href="/cli/analyze-schema">
+    Run complexity sweeps for all factors at once
+  </Card>
+  <Card title="Fit command" icon="circle-nodes" href="/cli/fit">
+    Use analysis results to fit factors with optimal K
+  </Card>
+  <Card title="Notebooks" icon="chart-line" href="/guides/notebooks">
+    Visualize complexity curves with matplotlib
+  </Card>
+  <Card title="Gaussian mixtures" icon="book" href="/concepts/gaussian-mixtures">
+    Understand bias-variance trade-offs in GMM complexity
+  </Card>
+</CardGroup>

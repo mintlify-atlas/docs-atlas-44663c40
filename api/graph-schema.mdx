@@ -1,0 +1,500 @@
+---
+title: GraphSchema & FactorDef
+description: Define the structure of factor graphs for GMBP inference
+---
+
+## Overview
+
+The `GraphSchema` class defines the structure of a factor graph, including variables, factors, and their connections. `FactorDef` represents individual factor definitions within the schema.
+
+## GraphSchema
+
+### Class signature
+
+```python
+@dataclass
+class GraphSchema:
+    variables: List[str]
+    factors: List[FactorDef]
+    column_map: Dict[str, str] = field(default_factory=dict)
+```
+
+<ParamField path="variables" type="List[str]" required>
+  List of variable names in the factor graph. Must be unique.
+</ParamField>
+
+<ParamField path="factors" type="List[FactorDef]" required>
+  List of factor definitions. Each factor connects a subset of variables.
+</ParamField>
+
+<ParamField path="column_map" type="Dict[str, str]" default="{}">
+  Optional mapping from generic variable names to CSV column names. If empty or key missing, assumes variable name equals CSV column name.
+</ParamField>
+
+### Methods
+
+#### get_neighbors
+
+Return a dictionary mapping each variable to its connected factors.
+
+```python
+def get_neighbors(self) -> Dict[str, List[str]]
+```
+
+<ResponseField name="neighbors" type="Dict[str, List[str]]">
+  Dictionary where keys are variable names and values are lists of connected factor names
+</ResponseField>
+
+#### Example
+
+```python
+from gmbp import GraphSchema, FactorDef
+
+schema = GraphSchema(
+    variables=["X", "Y", "Z"],
+    factors=[
+        FactorDef(name="f1", scope=["X", "Y"]),
+        FactorDef(name="f2", scope=["Y", "Z"])
+    ]
+)
+
+neighbors = schema.get_neighbors()
+print(neighbors)
+# Output: {'X': ['f1'], 'Y': ['f1', 'f2'], 'Z': ['f2']}
+```
+
+#### get_factor_scopes
+
+Return a dictionary mapping each factor name to its scope (list of variables).
+
+```python
+def get_factor_scopes(self) -> Dict[str, List[str]]
+```
+
+<ResponseField name="scopes" type="Dict[str, List[str]]">
+  Dictionary mapping factor names to their scope variables
+</ResponseField>
+
+#### Example
+
+```python
+scopes = schema.get_factor_scopes()
+print(scopes)
+# Output: {'f1': ['X', 'Y'], 'f2': ['Y', 'Z']}
+```
+
+#### non_pairwise_factor_names
+
+Return factor names whose scope size differs from 2.
+
+```python
+def non_pairwise_factor_names(self) -> List[str]
+```
+
+<ResponseField name="factor_names" type="List[str]">
+  List of factor names with scope size ≠ 2
+</ResponseField>
+
+#### Example
+
+```python
+schema = GraphSchema(
+    variables=["X", "Y", "Z"],
+    factors=[
+        FactorDef(name="f1", scope=["X", "Y"]),
+        FactorDef(name="f2", scope=["X", "Y", "Z"])
+    ]
+)
+
+non_pairwise = schema.non_pairwise_factor_names()
+print(non_pairwise)
+# Output: ['f2']
+```
+
+#### pairwise_only
+
+Return a new schema containing only pairwise factors, plus a list of dropped factor names.
+
+```python
+def pairwise_only(self) -> Tuple[GraphSchema, List[str]]
+```
+
+<ResponseField name="filtered_schema" type="GraphSchema">
+  New schema with only factors having scope size = 2
+</ResponseField>
+
+<ResponseField name="dropped" type="List[str]">
+  List of factor names that were removed
+</ResponseField>
+
+#### Example
+
+```python
+filtered_schema, dropped = schema.pairwise_only()
+print(f"Dropped: {dropped}")
+# Output: Dropped: ['f2']
+```
+
+#### validate
+
+Validate schema consistency and optionally enforce pairwise-only structure.
+
+```python
+def validate(self, strict_pairwise: bool = False) -> None
+```
+
+<ParamField path="strict_pairwise" type="bool" default="False">
+  If `True`, raises an error if any factor has scope size ≠ 2
+</ParamField>
+
+Validation checks:
+1. At least one variable and one factor defined
+2. No duplicate variable names
+3. No duplicate factor names
+4. No factors with empty scope
+5. All factor scope variables exist in `variables` list
+6. No repeated variables within a factor's scope
+7. (Optional) All factors are pairwise if `strict_pairwise=True`
+
+<Warning>
+Raises `ValueError` with a descriptive message if validation fails.
+</Warning>
+
+#### Example
+
+```python
+try:
+    schema.validate(strict_pairwise=True)
+    print("Schema is valid and pairwise")
+except ValueError as e:
+    print(f"Validation error: {e}")
+```
+
+#### from_dict
+
+Load schema from a dictionary structure (typically from JSON).
+
+```python
+@classmethod
+def from_dict(cls, data: Dict[str, Any]) -> GraphSchema
+```
+
+<ParamField path="data" type="Dict[str, Any]" required>
+  Dictionary with keys: `variables`, `factors`, and optionally `column_map`
+</ParamField>
+
+<ResponseField name="schema" type="GraphSchema">
+  Constructed GraphSchema instance
+</ResponseField>
+
+#### Example
+
+```python
+import json
+from gmbp import GraphSchema
+
+with open("data/abalone/schema.json", "r") as f:
+    schema_data = json.load(f)
+
+schema = GraphSchema.from_dict(schema_data)
+schema.validate()
+```
+
+## FactorDef
+
+### Class signature
+
+```python
+@dataclass
+class FactorDef:
+    name: str
+    scope: List[str]
+    n_components: int = 10
+    baseline_components: int = 1
+```
+
+<ParamField path="name" type="str" required>
+  Unique identifier for the factor
+</ParamField>
+
+<ParamField path="scope" type="List[str]" required>
+  List of variable names in this factor's scope
+</ParamField>
+
+<ParamField path="n_components" type="int" default="10">
+  Number of Gaussian components to use when fitting this factor from data
+</ParamField>
+
+<ParamField path="baseline_components" type="int" default="1">
+  Baseline component count for comparison (used in analysis)
+</ParamField>
+
+<Note>
+`n_components` controls the expressiveness of the factor. Higher values capture more complex distributions but increase computational cost.
+</Note>
+
+## Usage examples
+
+### Define schema in Python
+
+```python
+from gmbp import GraphSchema, FactorDef
+
+schema = GraphSchema(
+    variables=["LENGTH", "DIAMETER", "WHOLE"],
+    factors=[
+        FactorDef(
+            name="f_len_diam",
+            scope=["LENGTH", "DIAMETER"],
+            n_components=15
+        ),
+        FactorDef(
+            name="f_diam_whole",
+            scope=["DIAMETER", "WHOLE"],
+            n_components=15
+        )
+    ],
+    column_map={
+        "LENGTH": "Length",
+        "DIAMETER": "Diameter",
+        "WHOLE": "Whole weight"
+    }
+)
+
+schema.validate(strict_pairwise=True)
+print(f"Valid pairwise schema with {len(schema.variables)} variables")
+```
+
+### Load schema from JSON
+
+```json
+{
+  "variables": ["LENGTH", "DIAMETER", "WHOLE"],
+  "column_map": {
+    "LENGTH": "Length",
+    "DIAMETER": "Diameter",
+    "WHOLE": "Whole weight"
+  },
+  "factors": [
+    {
+      "name": "f_len_diam_whole",
+      "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+      "n_components": 10,
+      "baseline_components": 1
+    }
+  ]
+}
+```
+
+```python
+import json
+from gmbp import GraphSchema
+
+with open("data/abalone/schema.json", "r") as f:
+    schema = GraphSchema.from_dict(json.load(f))
+
+schema.validate()
+```
+
+### Use with BPEngine
+
+```python
+import json
+from gmbp import BPEngine, GraphSchema, load_factor, Evidence
+import numpy as np
+
+# 1. Load schema
+with open("data/abalone/schema.json", "r") as f:
+    schema = GraphSchema.from_dict(json.load(f))
+
+schema.validate()
+
+# 2. Load factors
+factors = {}
+for f_def in schema.factors:
+    factors[f_def.name] = load_factor(
+        f_def.name,
+        K=f_def.n_components,
+        factors_dir="artifacts/factors"
+    )
+
+# 3. Set up evidence
+evidence = {
+    "SHELL": Evidence.from_hard(np.array([0.4]))
+}
+
+# 4. Initialize engine
+engine = BPEngine(
+    factors=factors,
+    neighbors=schema.get_neighbors(),
+    factor_scopes=schema.get_factor_scopes(),
+    evidence=evidence
+)
+
+engine.initialize_messages()
+results = engine.run(max_iter=20, max_components=20)
+beliefs = engine.compute_beliefs()
+```
+
+### Filter to pairwise factors
+
+```python
+from gmbp import GraphSchema, FactorDef
+
+original_schema = GraphSchema(
+    variables=["A", "B", "C", "D"],
+    factors=[
+        FactorDef(name="f1", scope=["A", "B"]),
+        FactorDef(name="f2", scope=["B", "C", "D"]),  # Ternary
+        FactorDef(name="f3", scope=["C", "D"])
+    ]
+)
+
+# Get pairwise-only version
+pairwise_schema, dropped = original_schema.pairwise_only()
+
+print(f"Original factors: {[f.name for f in original_schema.factors]}")
+# Output: ['f1', 'f2', 'f3']
+
+print(f"Pairwise factors: {[f.name for f in pairwise_schema.factors]}")
+# Output: ['f1', 'f3']
+
+print(f"Dropped: {dropped}")
+# Output: ['f2']
+
+# Validate pairwise schema
+pairwise_schema.validate(strict_pairwise=True)  # Passes
+```
+
+### Column mapping
+
+Map generic variable names to dataset-specific column names:
+
+```python
+schema = GraphSchema(
+    variables=["X1", "X2", "Y"],
+    factors=[
+        FactorDef(name="f", scope=["X1", "X2", "Y"])
+    ],
+    column_map={
+        "X1": "Feature_A",
+        "X2": "Feature_B",
+        "Y": "Target_Value"
+    }
+)
+
+# When loading data, use column_map to find CSV columns
+for var in schema.variables:
+    csv_column = schema.column_map.get(var, var)
+    print(f"{var} -> {csv_column}")
+# Output:
+# X1 -> Feature_A
+# X2 -> Feature_B
+# Y -> Target_Value
+```
+
+## Validation examples
+
+### Valid schema
+
+```python
+schema = GraphSchema(
+    variables=["A", "B", "C"],
+    factors=[
+        FactorDef(name="f1", scope=["A", "B"]),
+        FactorDef(name="f2", scope=["B", "C"])
+    ]
+)
+
+schema.validate()  # Passes
+schema.validate(strict_pairwise=True)  # Also passes
+```
+
+### Invalid: duplicate variables
+
+```python
+schema = GraphSchema(
+    variables=["A", "B", "A"],  # Duplicate!
+    factors=[FactorDef(name="f1", scope=["A", "B"])]
+)
+
+try:
+    schema.validate()
+except ValueError as e:
+    print(e)
+# Output: Schema contains duplicate variables: A
+```
+
+### Invalid: unknown variable in factor
+
+```python
+schema = GraphSchema(
+    variables=["A", "B"],
+    factors=[FactorDef(name="f1", scope=["A", "C"])]  # C not in variables!
+)
+
+try:
+    schema.validate()
+except ValueError as e:
+    print(e)
+# Output: Schema contains factor variables missing from `variables`: f1:C
+```
+
+### Invalid: strict pairwise violation
+
+```python
+schema = GraphSchema(
+    variables=["A", "B", "C"],
+    factors=[FactorDef(name="f1", scope=["A", "B", "C"])]  # Ternary
+)
+
+schema.validate()  # Passes (strict_pairwise=False by default)
+
+try:
+    schema.validate(strict_pairwise=True)
+except ValueError as e:
+    print(e)
+# Output: Strict pairwise mode enabled but found non-pairwise factors: f1
+```
+
+## Design notes
+
+### Pairwise assumption
+
+Many GMBP workflows assume pairwise factors for efficiency:
+
+- Factor-to-variable messages expect one incoming message per observed variable
+- Pairwise structure simplifies message schedules
+- Conditioning complexity is O(K²) for pairwise vs O(K^n) for n-ary factors
+
+Use `strict_pairwise=True` when this assumption is required:
+
+```python
+schema.validate(strict_pairwise=True)
+```
+
+For non-pairwise schemas, use `pairwise_only()` to filter:
+
+```python
+pairwise_schema, dropped = schema.pairwise_only()
+if dropped:
+    print(f"Warning: Dropped non-pairwise factors: {dropped}")
+```
+
+### Variable ordering
+
+Variable order in factor scopes affects:
+- Index mapping in conditioning operations
+- Memory layout in covariance matrices
+- Consistency in marginal extraction
+
+The implementation preserves variable order from the schema definition.
+
+<Tip>
+When defining schemas, use consistent alphabetical or semantic ordering of variables within factor scopes for easier debugging.
+</Tip>
+
+## Related
+
+- [BPEngine](/api/bp-engine) - Use schemas to initialize belief propagation
+- [GMMContainer](/api/gmm-container) - Factors are represented as GMMs

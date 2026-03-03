@@ -1,0 +1,328 @@
+---
+title: Graph schema
+description: Learn how to define factor graphs with variables, factors, and scopes in Fusion GMBP
+---
+
+The **graph schema** defines the structure of your probabilistic model: which variables exist, how they relate through factors, and how the graph connects to your data.
+
+## Schema structure
+
+From `schema.py:18`:
+
+```python
+@dataclass
+class GraphSchema:
+    """
+    Schema defining the structure of the factor graph.
+    Contains the variables, factors, and optional data mapping.
+    """
+    variables: List[str]
+    factors: List[FactorDef]
+    column_map: Dict[str, str] = field(default_factory=dict)
+```
+
+### Variables
+
+Variables are the random quantities you want to perform inference over. In a factor graph:
+- Each variable is a node
+- Variables can be observed (evidence) or hidden (to be inferred)
+- Variables have continuous values (Fusion GMBP works with continuous domains)
+
+### Factors
+
+Factors represent joint probability distributions over subsets of variables. From `schema.py:8`:
+
+```python
+@dataclass
+class FactorDef:
+    """Definition of a factor in the graph."""
+    name: str
+    scope: List[str]  # Variables in this factor
+    n_components: int = 10
+    baseline_components: int = 1
+```
+
+Each factor defines:
+- **name**: Unique identifier for the factor
+- **scope**: List of variables the factor depends on
+- **n_components**: Number of Gaussian components to use when fitting (default 10)
+- **baseline_components**: Fallback for baseline models (default 1)
+
+<Info>
+The `scope` defines which variables are jointly modeled by this factor. For a pairwise factor between LENGTH and DIAMETER, the scope would be `["LENGTH", "DIAMETER"]`.
+</Info>
+
+### Column mapping
+
+The optional `column_map` translates variable names to CSV column names:
+
+```json
+"column_map": {
+  "LENGTH": "Length",
+  "DIAMETER": "Diameter",
+  "SHELL": "Shell weight"
+}
+```
+
+This allows you to use clean variable names in your schema while matching potentially messy column names in your data.
+
+## Example schema
+
+From `data/abalone/schema.json`:
+
+```json
+{
+  "variables": [
+    "LENGTH",
+    "DIAMETER",
+    "HEIGHT",
+    "WHOLE",
+    "SHUCKED",
+    "VISCERA",
+    "SHELL",
+    "RINGS"
+  ],
+  "column_map": {
+    "LENGTH":   "Length",
+    "DIAMETER": "Diameter",
+    "HEIGHT":   "Height",
+    "WHOLE":    "Whole weight",
+    "SHUCKED":  "Shucked weight",
+    "VISCERA":  "Viscera weight",
+    "SHELL":    "Shell weight",
+    "RINGS":    "Rings"
+  },
+  "factors": [
+    {
+      "name": "f_len_diam_whole",
+      "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+      "n_components": 10
+    },
+    {
+      "name": "f_diam_shell",
+      "scope": ["DIAMETER", "SHELL"],
+      "n_components": 10
+    },
+    {
+      "name": "f_whole_shell",
+      "scope": ["WHOLE", "SHELL"],
+      "n_components": 10
+    }
+  ]
+}
+```
+
+This schema defines:
+- 8 continuous variables
+- Multiple factors capturing dependencies (some pairwise, one ternary)
+- Mapping from variable names to CSV columns
+
+## Graph topology
+
+The schema defines a **bipartite graph** with two types of nodes:
+
+- **Variable nodes** (circles): Represent random variables
+- **Factor nodes** (squares): Represent joint distributions
+
+Edges connect factors to variables in their scope.
+
+<Note>
+Fusion GMBP uses the bipartite factor graph representation, where factors and variables are distinct node types. This differs from Markov Random Fields where all nodes are variables.
+</Note>
+
+### Neighbors and scopes
+
+From `schema.py:31`:
+
+```python
+def get_neighbors(self) -> Dict[str, List[str]]:
+    """Returns map from variable name to connected factor names."""
+    neighbors = {v: [] for v in self.variables}
+    for factor in self.factors:
+        for var in factor.scope:
+            neighbors[var].append(factor.name)
+    return neighbors
+
+def get_factor_scopes(self) -> Dict[str, List[str]]:
+    """Returns map from factor name to its scope."""
+    return {f.name: f.scope for f in self.factors}
+```
+
+These mappings are used by the BP engine to route messages:
+
+```python
+neighbors = schema.get_neighbors()
+# {'LENGTH': ['f_len_diam_whole'], 'DIAMETER': ['f_len_diam_whole', 'f_diam_shell'], ...}
+
+factor_scopes = schema.get_factor_scopes()
+# {'f_len_diam_whole': ['LENGTH', 'DIAMETER', 'WHOLE'], ...}
+```
+
+## Pairwise constraints
+
+From the README:
+
+> Factors are assumed **pairwise** for strict mode (`--strict-pairwise`).
+
+Many inference algorithms work best with pairwise factors (scope of exactly 2 variables). The schema provides utilities for this:
+
+```python
+# Check for non-pairwise factors
+non_pairwise = schema.non_pairwise_factor_names()
+if non_pairwise:
+    print(f"Non-pairwise factors: {non_pairwise}")
+
+# Create pairwise-only schema
+pairwise_schema, dropped = schema.pairwise_only()
+print(f"Dropped {len(dropped)} non-pairwise factors")
+```
+
+From `schema.py:45`:
+
+```python
+def non_pairwise_factor_names(self) -> List[str]:
+    """Return factor names whose scope size differs from 2."""
+    return [f.name for f in self.factors if len(f.scope) != 2]
+
+def pairwise_only(self) -> Tuple["GraphSchema", List[str]]:
+    """Return schema with only pairwise factors plus dropped names."""
+    dropped = self.non_pairwise_factor_names()
+    filtered_factors = [f for f in self.factors if len(f.scope) == 2]
+    return GraphSchema(
+        variables=list(self.variables),
+        factors=filtered_factors,
+        column_map=dict(self.column_map),
+    ), dropped
+```
+
+<Warning>
+Higher-order factors (scope > 2) can cause component explosion during message passing. Use sequential conditioning and aggressive mixture reduction to manage this.
+</Warning>
+
+## Schema validation
+
+From `schema.py:62`, schemas are validated for consistency:
+
+```python
+def validate(self, strict_pairwise: bool = False) -> None:
+    """
+    Validate schema consistency.
+    Use strict_pairwise=True to enforce pairwise assumption.
+    """
+    # Check for duplicate variables
+    if len(set(self.variables)) != len(self.variables):
+        raise ValueError("Schema contains duplicate variables")
+    
+    # Check for duplicate factor names
+    if len(set(factor_names)) != len(factor_names):
+        raise ValueError("Schema contains duplicate factor names")
+    
+    # Check factor scopes reference valid variables
+    for factor in self.factors:
+        for var in factor.scope:
+            if var not in self.variables:
+                raise ValueError(f"Factor {factor.name} references unknown variable {var}")
+    
+    # Optional: enforce pairwise constraint
+    if strict_pairwise:
+        non_pairwise = self.non_pairwise_factor_names()
+        if non_pairwise:
+            raise ValueError(f"Strict pairwise mode but found: {non_pairwise}")
+```
+
+Validation catches:
+- Duplicate variable or factor names
+- Factors with empty scopes
+- Factors referencing undefined variables
+- Repeated variables within a factor scope
+- Non-pairwise factors (when `strict_pairwise=True`)
+
+## Creating a schema
+
+### From dictionary
+
+```python
+import json
+from gmbp import GraphSchema
+
+with open("data/abalone/schema.json", "r") as f:
+    schema = GraphSchema.from_dict(json.load(f))
+
+schema.validate()
+print(f"Schema has {len(schema.variables)} variables and {len(schema.factors)} factors")
+```
+
+### Programmatically
+
+```python
+from gmbp.schema import GraphSchema, FactorDef
+
+schema = GraphSchema(
+    variables=["X", "Y", "Z"],
+    factors=[
+        FactorDef(name="f_xy", scope=["X", "Y"], n_components=10),
+        FactorDef(name="f_yz", scope=["Y", "Z"], n_components=10),
+    ],
+    column_map={"X": "feature_1", "Y": "feature_2", "Z": "target"}
+)
+
+schema.validate()
+```
+
+## Using schemas for inference
+
+```python
+from gmbp import BPEngine, load_factor, Evidence
+import json
+
+# 1. Load schema
+with open("data/abalone/schema.json", "r") as f:
+    schema = GraphSchema.from_dict(json.load(f))
+
+# 2. Load trained factors
+factors = {}
+for f_def in schema.factors:
+    factors[f_def.name] = load_factor(f_def.name, K=10)
+
+# 3. Set evidence
+evidence = {
+    "SHELL": Evidence.from_hard([0.4])
+}
+
+# 4. Create engine with schema-derived topology
+engine = BPEngine(
+    factors=factors,
+    neighbors=schema.get_neighbors(),
+    factor_scopes=schema.get_factor_scopes(),
+    evidence=evidence
+)
+
+# 5. Run inference
+engine.initialize_messages()
+engine.run(max_iter=10)
+beliefs = engine.compute_beliefs()
+```
+
+## Design considerations
+
+<Accordion title="Factor scope design">
+When designing factor scopes:
+- **Pairwise factors** are computationally efficient and numerically stable
+- **Higher-order factors** can model complex dependencies but require more components
+- **Fully connected** factors (one factor over all variables) are impractical for loopy BP
+- **Sparse connectivity** (each variable in few factors) improves convergence
+</Accordion>
+
+<Accordion title="Graph structure">
+From the README:
+> Factor-to-variable updates expect one **unary incoming message per observed variable**.
+
+This means:
+- Each incoming message to a factor should be over a single variable
+- Multi-variable evidence should be injected through variable nodes
+- Don't create mis-scoped messages that combine multiple variables
+</Accordion>
+
+<Tip>
+Start with a pairwise schema based on strong pairwise correlations in your data. You can identify these using correlation analysis or mutual information.
+</Tip>

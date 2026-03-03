@@ -1,0 +1,289 @@
+---
+title: gmbp fit
+description: Train GMM factors from data by learning joint probability distributions
+---
+
+The `gmbp fit` command learns Gaussian Mixture Model (GMM) factors from your dataset. Each factor represents a joint probability distribution over a subset of variables defined in your schema.
+
+## Basic usage
+
+```bash
+gmbp fit --data abalone
+```
+
+This command:
+1. Loads the schema (defaults to `data/abalone/abalone.json` or `schema.json`)
+2. Loads the dataset CSV from `data/abalone/abalone.csv`
+3. Fits a GMM for each factor defined in the schema
+4. Saves trained factors to `artifacts/factors/`
+
+## Command options
+
+### Required parameters
+
+<ParamField path="--data" type="string">
+  Dataset name or path to input CSV / dataset folder.
+  
+  The resolver behavior:
+  - `--data <dataname>` resolves dataset folder from `./data/<dataname>/`
+  - Looks for CSV at `data/<dataname>/<dataname>.csv`
+  - Auto-detects schema if `--schema` is omitted
+  
+  ```bash
+  gmbp fit --data abalone
+  gmbp fit --data circular_factory
+  ```
+</ParamField>
+
+### Optional parameters
+
+<ParamField path="--schema" type="string">
+  Schema name or path to schema JSON file.
+  
+  Resolution logic when omitted:
+  1. Tries `data/<dataname>/<dataname>.json`
+  2. Falls back to `data/<dataname>/schema.json`
+  
+  When provided:
+  - Resolves `<name>.json` inside the dataset folder
+  - Or accepts an explicit path
+  
+  ```bash
+  # Use default schema resolution
+  gmbp fit --data abalone
+  
+  # Override with schema name (resolves to data/abalone/schema_nd.json)
+  gmbp fit --data abalone --schema schema_nd
+  
+  # Explicit schema file path
+  gmbp fit --schema data/abalone/schema_nd.json --data abalone
+  ```
+</ParamField>
+
+<ParamField path="--components" type="integer">
+  Override number of GMM components per factor. Short form: `-K`
+  
+  If not specified:
+  - Uses `n_components` from each factor definition in the schema
+  - Defaults to 10 if not defined in schema
+  
+  ```bash
+  # Fit all factors with K=8 components
+  gmbp fit --data abalone --components 8
+  
+  # Short form
+  gmbp fit --data abalone -K 15
+  ```
+</ParamField>
+
+<ParamField path="--out-dir" type="string" default="artifacts/factors">
+  Directory to save fitted factors.
+  
+  Each factor is saved as a pickle file named `<factor_name>_K<n>.pkl`
+  
+  ```bash
+  gmbp fit --data abalone --components 8 --out-dir artifacts/factors_K8
+  ```
+</ParamField>
+
+<ParamField path="--seed" type="integer" default="42">
+  Random seed for reproducibility.
+  
+  Ensures deterministic GMM initialization and convergence.
+  
+  ```bash
+  gmbp fit --data abalone --seed 12345
+  ```
+</ParamField>
+
+<ParamField path="--strict-pairwise" type="boolean">
+  Enforce pairwise-only factors.
+  
+  When enabled, schema validation fails if any factor scope contains more than 2 variables.
+  
+  ```bash
+  gmbp fit --data abalone --strict-pairwise
+  ```
+</ParamField>
+
+<ParamField path="--verbose" type="boolean">
+  Enable verbose logging. Short form: `-v`
+  
+  Shows detailed progress for each factor fit including:
+  - Data loading steps
+  - Factor scope and component count
+  - Average negative log-likelihood (NLL)
+  
+  ```bash
+  gmbp fit --data abalone --verbose
+  ```
+</ParamField>
+
+## Examples
+
+### Basic fit with defaults
+
+Fit factors using default schema and output directory:
+
+```bash
+gmbp fit --data abalone
+```
+
+Expected output:
+```
+2026-03-03 10:30:15 - INFO - Loaded graph schema for <auto>
+2026-03-03 10:30:15 - INFO - Loading data from abalone
+2026-03-03 10:30:15 - INFO - Fitting factors (seed=42)...
+2026-03-03 10:30:15 - INFO - Fitting factor 'f_len_diam_whole' on scope ['LENGTH', 'DIAMETER', 'WHOLE'] with K=10
+2026-03-03 10:30:16 - INFO -   -> Fitted. Avg NLL: 2.4531
+2026-03-03 10:30:16 - INFO - All factors fitted and saved to artifacts/factors
+```
+
+### Custom components and output location
+
+Fit with K=8 components and save to a custom directory:
+
+```bash
+gmbp fit --data abalone --schema schema_nd --components 8 --out-dir artifacts/factors_K8
+```
+
+### Using explicit schema path
+
+Works cross-platform with explicit paths:
+
+```bash
+gmbp fit --schema data/abalone/schema_nd.json --data abalone
+```
+
+### Fitting with verbose output
+
+See detailed progress information:
+
+```bash
+gmbp fit --data abalone --verbose
+```
+
+## Output format
+
+Fitted factors are saved as pickle files in the output directory:
+
+```
+artifacts/factors/
+├── f_len_diam_whole_K10.pkl
+├── f_shell_rings_K10.pkl
+└── ...
+```
+
+Each factor file contains:
+- **GMM parameters**: weights, means, covariances
+- **Variable names**: scope of the factor
+- **Metadata**: component count, NLL score
+
+<Info>
+  The filename includes the component count (e.g., `_K10`) to distinguish factors fitted with different complexity settings.
+</Info>
+
+## Schema format
+
+Your schema JSON defines which factors to fit:
+
+```json schema.json
+{
+  "variables": ["LENGTH", "DIAMETER", "WHOLE"],
+  "column_map": {
+    "LENGTH": "Length",
+    "DIAMETER": "Diameter",
+    "WHOLE": "Whole weight"
+  },
+  "factors": [
+    {
+      "name": "f_len_diam_whole",
+      "scope": ["LENGTH", "DIAMETER", "WHOLE"],
+      "n_components": 10
+    }
+  ]
+}
+```
+
+<ParamField path="variables" type="array" required>
+  List of all variables in the graphical model
+</ParamField>
+
+<ParamField path="column_map" type="object" required>
+  Maps variable names to CSV column names
+</ParamField>
+
+<ParamField path="factors" type="array" required>
+  Factor definitions with:
+  - `name`: Unique identifier for the factor
+  - `scope`: List of variables in this factor
+  - `n_components`: Number of GMM components (optional, defaults to 10)
+</ParamField>
+
+## Error handling
+
+### Schema not found
+
+```bash
+gmbp fit --data mydata
+```
+
+If schema files don't exist:
+```
+ERROR - Failed to load schema: Schema not found at data/mydata/mydata.json or data/mydata/schema.json
+```
+
+**Solution**: Create a schema file following the format above.
+
+### Data loading failed
+
+```
+ERROR - Data loading failed: CSV file not found at data/abalone/abalone.csv
+```
+
+**Solution**: Ensure your dataset follows the directory structure:
+```
+data/
+└── abalone/
+    ├── abalone.csv          # Dataset
+    └── abalone.json         # Schema
+```
+
+### Missing columns
+
+```
+ERROR - Failed to fit factor f_len_diam_whole: Column 'LENGTH' not found in dataset
+```
+
+**Solution**: Check that `column_map` in your schema correctly maps to actual CSV columns.
+
+## Performance tips
+
+<Tip>
+  **Component count trade-offs:**
+  - Fewer components (K=5-10): Faster fitting, simpler models
+  - More components (K=15-20): Better fit for complex distributions, slower inference
+  
+  Use `gmbp analyze` to find the optimal K for your dataset.
+</Tip>
+
+<Warning>
+  **Large datasets**: Fitting with high component counts (K>20) on large datasets can take significant time. Start with smaller K values and use complexity analysis to determine if higher K is needed.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Run inference" icon="play" href="/cli/run">
+    Use fitted factors to perform belief propagation
+  </Card>
+  <Card title="Analyze complexity" icon="chart-line" href="/cli/analyze">
+    Find optimal component count for your factors
+  </Card>
+  <Card title="Schema reference" icon="file-code" href="/concepts/graph-schema">
+    Learn more about schema configuration
+  </Card>
+  <Card title="Python API" icon="code" href="/api/gmm-fit">
+    Use the fitting API programmatically
+  </Card>
+</CardGroup>

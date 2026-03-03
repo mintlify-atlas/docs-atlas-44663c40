@@ -1,0 +1,154 @@
+---
+title: Configuration
+description: Configuration constants and directory paths for Fusion GMBP
+---
+
+The `config` module defines essential paths and default configuration values used throughout the Fusion GMBP library.
+
+## Directory paths
+
+All paths are `pathlib.Path` objects resolved relative to the project structure.
+
+### SRC_DIR
+
+```python
+SRC_DIR: Path
+```
+
+<ResponseField name="SRC_DIR" type="Path">
+  Path to the source directory containing the `gmbp` package.
+  
+  Resolved as the parent directory of the config module itself.
+</ResponseField>
+
+### PROJECT_ROOT
+
+```python
+PROJECT_ROOT: Path
+```
+
+<ResponseField name="PROJECT_ROOT" type="Path">
+  Path to the project root directory.
+  
+  Resolved as two levels up from `SRC_DIR` (i.e., `SRC_DIR.parent.parent`).
+</ResponseField>
+
+### WORKSPACE_ROOT
+
+```python
+WORKSPACE_ROOT: Path
+```
+
+<ResponseField name="WORKSPACE_ROOT" type="Path">
+  Path to the workspace root directory.
+  
+  Resolved as the parent of `PROJECT_ROOT`.
+</ResponseField>
+
+### DATA_DIR
+
+```python
+DATA_DIR: Path
+```
+
+<ResponseField name="DATA_DIR" type="Path">
+  Path to the data directory containing datasets.
+  
+  Resolved as `PROJECT_ROOT / "data"`.
+  
+  This is the primary location searched by `load_data()` and related I/O functions when resolving dataset names.
+</ResponseField>
+
+### ARTIFACTS_DIR
+
+```python
+ARTIFACTS_DIR: Path
+```
+
+<ResponseField name="ARTIFACTS_DIR" type="Path">
+  Path to the artifacts directory for storing generated files.
+  
+  Resolved as `PROJECT_ROOT / "artifacts"`.
+</ResponseField>
+
+### FACTORS_DIR
+
+```python
+FACTORS_DIR: Path
+```
+
+<ResponseField name="FACTORS_DIR" type="Path">
+  Path to the factors subdirectory within artifacts.
+  
+  Resolved as `ARTIFACTS_DIR / "factors"`.
+  
+  This directory is automatically created if it doesn't exist.
+</ResponseField>
+
+## Constants
+
+### DEFAULT_DATASET
+
+```python
+DEFAULT_DATASET: str = "abalone"
+```
+
+<ResponseField name="DEFAULT_DATASET" type="str">
+  The default dataset name used when no dataset is specified.
+  
+  Set to `"abalone"`.
+  
+  Used by `load_data()` when called without a `path` argument.
+</ResponseField>
+
+## Example usage
+
+```python
+from gmbp.config import (
+    DATA_DIR,
+    FACTORS_DIR,
+    DEFAULT_DATASET,
+    PROJECT_ROOT
+)
+
+# Access data directory
+print(f"Data directory: {DATA_DIR}")
+
+# Construct path to specific dataset
+dataset_path = DATA_DIR / "abalone" / "abalone.csv"
+
+# Access default dataset name
+print(f"Default dataset: {DEFAULT_DATASET}")
+
+# Store computed factors
+factor_file = FACTORS_DIR / "my_factor.npy"
+```
+
+<Note>
+  The `FACTORS_DIR` directory is automatically created when the config module is imported, ensuring it's always available for storing artifacts.
+</Note>
+
+## Directory structure
+
+The configuration assumes the following project structure:
+
+```
+WORKSPACE_ROOT/
+└── PROJECT_ROOT/
+    ├── src/
+    │   └── gmbp/          # SRC_DIR
+    │       ├── config.py
+    │       ├── io_data.py
+    │       └── ...
+    ├── data/              # DATA_DIR
+    │   ├── abalone/
+    │   │   ├── abalone.csv
+    │   │   └── schema.json
+    │   └── ...
+    └── artifacts/         # ARTIFACTS_DIR
+        └── factors/       # FACTORS_DIR
+```
+
+<Info>
+  All paths are resolved at import time using `pathlib.Path`, making them platform-independent and safe for use across Windows, macOS, and Linux.
+</Info>

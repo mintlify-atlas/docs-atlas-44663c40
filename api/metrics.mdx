@@ -1,0 +1,254 @@
+---
+title: Metrics and utilities
+description: Functions for computing moments, samples, likelihoods, and diagnostics for Gaussian mixture models
+---
+
+Utilities for analyzing and evaluating GMM distributions.
+
+## compute_moments_1d
+
+Computes the mean and variance of a univariate (1D) GMM.
+
+```python
+from gmbp.metrics import compute_moments_1d
+
+mean, var = compute_moments_1d(gmm_1d)
+print(f"Mean: {mean:.3f}, Std: {var**0.5:.3f}")
+```
+
+### Parameters
+
+<ParamField path="gmm" type="GMMContainer" required>
+  A 1D GMM container (must have `gmm.dim == 1`).
+</ParamField>
+
+### Returns
+
+<ResponseField name="mean" type="float">
+  The expected value: `E[X] = Σ w_k μ_k`
+</ResponseField>
+
+<ResponseField name="variance" type="float">
+  The variance: `Var[X] = E[X²] - (E[X])²` where `E[X²] = Σ w_k (σ_k² + μ_k²)`
+</ResponseField>
+
+<Warning>
+  Raises `ValueError` if `gmm.dim != 1`.
+</Warning>
+
+---
+
+## sample_gmm
+
+Generates random samples from a GMM.
+
+```python
+from gmbp.metrics import sample_gmm
+import matplotlib.pyplot as plt
+
+samples = sample_gmm(gmm, n_samples=1000, seed=42)
+print(samples.shape)  # (1000, dim)
+
+plt.scatter(samples[:, 0], samples[:, 1])
+plt.show()
+```
+
+### Parameters
+
+<ParamField path="gmm" type="GMMContainer" required>
+  The GMM to sample from.
+</ParamField>
+
+<ParamField path="n_samples" type="int" required>
+  Number of samples to generate.
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random seed for reproducibility.
+</ParamField>
+
+### Returns
+
+<ResponseField name="samples" type="np.ndarray">
+  Array of shape `(n_samples, dim)` containing samples drawn from the mixture.
+</ResponseField>
+
+<Info>
+  Sampling algorithm:
+  1. Sample component indices from the discrete distribution defined by `weights`
+  2. For each component, sample from `N(μ_k, Σ_k)`
+  3. Shuffle samples to remove component ordering
+</Info>
+
+<Note>
+  If a covariance matrix is numerically singular, adds `1e-6 * I` jitter for stability.
+</Note>
+
+---
+
+## gmm_logpdf
+
+Computes the log probability density `log p(x)` for a batch of samples.
+
+```python
+from gmbp.metrics import gmm_logpdf
+import numpy as np
+
+X_test = np.random.randn(100, gmm.dim)
+log_probs = gmm_logpdf(X_test, gmm)
+
+print(f"Average log-likelihood: {log_probs.mean():.3f}")
+```
+
+### Parameters
+
+<ParamField path="X" type="np.ndarray" required>
+  Data matrix of shape `(N, D)` where N is the number of samples.
+</ParamField>
+
+<ParamField path="gmm" type="GMMContainer" required>
+  The GMM to evaluate.
+</ParamField>
+
+### Returns
+
+<ResponseField name="log_probs" type="np.ndarray">
+  Array of shape `(N,)` containing `log p(x_i)` for each sample.
+</ResponseField>
+
+<Note>
+  Uses the log-sum-exp trick for numerical stability:
+  ```
+  log p(x) = log Σ_k w_k N(x; μ_k, Σ_k)
+           = logsumexp_k [log(w_k) + log N(x; μ_k, Σ_k)]
+  ```
+</Note>
+
+### Example: Computing negative log-likelihood
+
+```python
+nll = -gmm_logpdf(X_test, gmm).mean()
+print(f"Negative log-likelihood: {nll:.4f}")
+```
+
+---
+
+## kl_divergence_approx
+
+Approximates the Kullback-Leibler divergence `KL(P || Q)` using Monte Carlo sampling.
+
+```python
+from gmbp.metrics import kl_divergence_approx
+
+kl = kl_divergence_approx(p=true_gmm, q=approx_gmm, n_samples=5000)
+print(f"KL(P || Q) ≈ {kl:.4f} nats")
+```
+
+### Parameters
+
+<ParamField path="p" type="GMMContainer" required>
+  The reference distribution (P).
+</ParamField>
+
+<ParamField path="q" type="GMMContainer" required>
+  The approximating distribution (Q). Must have the same dimensionality as P.
+</ParamField>
+
+<ParamField path="n_samples" type="int" default="2000">
+  Number of Monte Carlo samples to use for the approximation.
+</ParamField>
+
+<ParamField path="seed" type="int" default="42">
+  Random seed for sampling.
+</ParamField>
+
+### Returns
+
+<ResponseField name="kl" type="float">
+  The approximate KL divergence in nats. Always non-negative (up to sampling error).
+</ResponseField>
+
+<Info>
+  The KL divergence is computed as:
+  ```
+  KL(P || Q) = E_p[log p(x) - log q(x)]
+             ≈ (1/N) Σ [log p(x_i) - log q(x_i)]  where x_i ~ P
+  ```
+</Info>
+
+<Warning>
+  Raises `ValueError` if the dimensions of P and Q do not match.
+</Warning>
+
+### Interpretation
+
+- `KL(P || Q) = 0`: P and Q are identical
+- `KL(P || Q) > 0`: P and Q differ; larger values indicate greater divergence
+- Asymmetric: `KL(P || Q) ≠ KL(Q || P)` in general
+
+---
+
+## estimate_mode_count_1d
+
+Estimates the number of prominent modes (peaks) in a univariate GMM density.
+
+```python
+from gmbp.metrics import estimate_mode_count_1d
+
+n_modes = estimate_mode_count_1d(
+    gmm=gmm_1d,
+    n_grid=512,
+    span_std=4.0,
+    prominence_ratio=0.05
+)
+
+print(f"Estimated {n_modes} mode(s)")
+```
+
+### Parameters
+
+<ParamField path="gmm" type="GMMContainer" required>
+  A 1D GMM container (must have `gmm.dim == 1`).
+</ParamField>
+
+<ParamField path="n_grid" type="int" default="512">
+  Number of grid points for density evaluation. Must be >= 64.
+</ParamField>
+
+<ParamField path="span_std" type="float" default="4.0">
+  Number of standard deviations to span on each side of the mean when constructing the evaluation grid.
+</ParamField>
+
+<ParamField path="prominence_ratio" type="float" default="0.05">
+  Relative prominence threshold for peak detection. Peaks must have prominence >= `prominence_ratio * max(pdf)`. Must be in [0, 1].
+</ParamField>
+
+### Returns
+
+<ResponseField name="n_modes" type="int">
+  The estimated number of prominent modes. Returns 0 if the density is invalid or flat.
+</ResponseField>
+
+<Note>
+  Uses `scipy.signal.find_peaks` with adaptive prominence thresholding. The grid spans `[μ - span_std*σ, μ + span_std*σ]` where μ and σ are the mixture moments.
+</Note>
+
+### Example: Adjusting sensitivity
+
+```python
+# More sensitive (detects smaller peaks)
+n_modes_sensitive = estimate_mode_count_1d(
+    gmm_1d,
+    prominence_ratio=0.01
+)
+
+# Less sensitive (only major peaks)
+n_modes_major = estimate_mode_count_1d(
+    gmm_1d,
+    prominence_ratio=0.1
+)
+```
+
+<Warning>
+  Raises `ValueError` if `gmm.dim != 1`, `n_grid < 64`, `span_std <= 0`, or `prominence_ratio` is outside [0, 1].
+</Warning>
